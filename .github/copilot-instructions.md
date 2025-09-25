@@ -98,13 +98,20 @@ cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Docume
 - ⚡ **Auto-rotate**: Delete oldest backup when creating new one
 - 🛡️ **Safety rule**: Never edit without recent backup
 
-**Current Project State**: ✅ **GITHUB READY** - Fully complete modular architecture with secure configuration system! 
+**Current Project State**: ✅ **GITHUB READY** - Complete modular architecture with versioning system! 
 - ✅ Modular architecture compiled successfully
 - ✅ Secure config template system (APN/MQTT as placeholders) 
 - ✅ Git repository initialized with proper .gitignore
 - ✅ GitHub Actions workflow for CI/CD
 - ✅ Complete documentation and contribution guidelines
-- ✅ Ready to push to GitHub as public repository "ESP32-S3-SIM7670G-4G"
+- ✅ Comprehensive versioning system (v1.0.0)
+- ✅ Ready to push to GitHub as public repository "ESP32-S3-SIM7670G-GPS-Tracker"
+
+**⚠️ CRITICAL DEVELOPMENT RULE: ALWAYS ADVANCE VERSIONING**
+- Every code change MUST bump version (patch/minor/major)
+- Use `python update_version.py --bump [type]` before any changes
+- Use `.\bump_and_commit.ps1 [type] "message"` for quick version+commit
+- See VERSIONING_WORKFLOW.md for complete process
 
 ### Using VS Code ESP-IDF Extension
 

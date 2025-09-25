@@ -1,10 +1,18 @@
 # ESP32-S3-SIM7670G GPS Tracker
 
-A comprehensive, modular GPS tracking device built for the ESP32-S3-SIM7670G development board, featuring cellular connectivity and battery monitoring with a clean, maintainable architecture.
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](VERSION)
+[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v5.5+-green.svg)](https://docs.espressif.com/projects/esp-idf/en/latest/)
+[![Hardware](https://img.shields.io/badge/hardware-ESP32--S3--SIM7670G-orange.svg)](https://www.waveshare.com/esp32-s3-sim7670g.htm)
+[![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
+[![Development Status](https://img.shields.io/badge/status-in%20development-yellow.svg)](#)
+
+> **⚠️ DEVELOPMENT STATUS**: This project is currently in development and may not work as expected. Use at your own risk. Testing and contributions are welcome!
+
+A modular GPS tracking device built for the ESP32-S3-SIM7670G development board, featuring cellular connectivity and battery monitoring with a clean, maintainable architecture.
 
 ## Overview
 
-This project implements a professional-grade GPS tracker that:
+This project implements a GPS tracker that:
 - 📍 Collects GPS location data using the integrated SIM7670G GNSS module
 - 🔋 Monitors battery status using the MAX17048 fuel gauge IC
 - 📡 Transmits data via MQTT over 4G/LTE cellular connection

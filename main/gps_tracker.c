@@ -10,6 +10,7 @@
 
 // Include configuration and modules
 #include "config.h"
+#include "version.h"
 #include "modules/gps/gps_module.h"
 #include "modules/lte/lte_module.h"
 #include "modules/mqtt/mqtt_module.h"
@@ -39,6 +40,12 @@ static char* create_json_payload(const gps_data_t* gps, const battery_data_t* ba
 void app_main(void)
 {
     ESP_LOGI(TAG, "ESP32-S3-SIM7670G GPS Tracker starting...");
+    
+    // Display version information
+    ESP_LOGI(TAG, "=== VERSION INFORMATION ===");
+    ESP_LOGI(TAG, "%s", get_version_info());
+    ESP_LOGI(TAG, "%s", get_build_info());
+    ESP_LOGI(TAG, "===========================");
     
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
