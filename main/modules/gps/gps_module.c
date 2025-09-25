@@ -280,11 +280,11 @@ static bool gps_read_data_impl(gps_data_t* data)
     memset(data, 0, sizeof(gps_data_t));
     
     // Poll GNSS data using AT+CGNSINF (Waveshare recommended polling command)
-    // This command returns location info without continuous output
+    // This command returns location info without continuous output - THE WORKING METHOD!
     at_response_t response = {0};
     bool has_data = false;
     
-    ESP_LOGD(TAG, "📍 Polling GNSS location data (AT+CGNSINF)");
+    ESP_LOGD(TAG, "📍 Polling GNSS location data (AT+CGNSINF) - REVERT TO WORKING METHOD");
     if (lte->send_at_command("AT+CGNSINF", &response, 3000)) {
         if (response.response[0] != '\0' && strstr(response.response, "+CGNSINF:") != NULL) {
             strncpy(buffer, response.response, 1023);

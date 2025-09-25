@@ -92,6 +92,7 @@ static lte_status_t lte_get_connection_status_impl(void);
 static bool lte_get_status_impl(lte_module_status_t* status);
 static bool lte_get_network_info_impl(lte_network_info_t* info);
 static bool lte_send_at_command_impl(const char* command, at_response_t* response, int timeout_ms);
+static bool lte_read_raw_data_impl(char* buffer, size_t buffer_size, size_t* bytes_read, int timeout_ms);
 static bool lte_set_apn_impl(const char* apn, const char* username, const char* password);
 static bool lte_check_sim_ready_impl(void);
 static bool lte_get_signal_strength_impl(int* rssi, int* quality);
@@ -112,6 +113,7 @@ static const lte_interface_t lte_interface = {
     .get_status = lte_get_status_impl,
     .get_network_info = lte_get_network_info_impl,
     .send_at_command = lte_send_at_command_impl,
+    .read_raw_data = lte_read_raw_data_impl,
     .set_apn = lte_set_apn_impl,
     .check_sim_ready = lte_check_sim_ready_impl,
     .get_signal_strength = lte_get_signal_strength_impl,
@@ -536,6 +538,62 @@ static bool lte_send_at_command_impl(const char* command, at_response_t* respons
     }
     
     return response->success;
+}
+
+static bool lte_read_raw_data_impl(char* buffer, size_t buffer_size, size_t* bytes_read, int timeout_ms)
+{
+    if (!buffer || buffer_size == 0 || !bytes_read) {
+        ESP_LOGE(TAG, "❌ Invalid parameters for raw data read");
+        return false;
+    }
+    
+    *bytes_read = 0;
+    
+    LTE_DEBUG_UART("📡 Reading raw UART data (timeout: %d ms, buffer: %d bytes)", timeout_ms, buffer_size);
+    
+    // Read raw data from UART (for NMEA sentences after GPS enable)
+    // SIM7670G outputs NMEA data directly to UART after AT+CGNSSTST=1
+    
+    TickType_t start_time = xTaskGetTickCount();
+    size_t total_read = 0;
+    
+    while ((xTaskGetTickCount() - start_time) < pdMS_TO_TICKS(timeout_ms) && total_read < (buffer_size - 1)) {
+        size_t available_bytes = 0;
+        esp_err_t err = uart_get_buffered_data_len(UART_NUM_1, &available_bytes);
+        
+        if (err == ESP_OK && available_bytes > 0) {
+            size_t to_read = (available_bytes < (buffer_size - 1 - total_read)) ? 
+                            available_bytes : (buffer_size - 1 - total_read);
+            
+            int len = uart_read_bytes(UART_NUM_1, buffer + total_read, to_read, pdMS_TO_TICKS(100));
+            
+            if (len > 0) {
+                total_read += len;
+                LTE_DEBUG_UART("📋 Read %d bytes (total: %d)", len, total_read);
+                
+                // Check if we have complete NMEA sentences (ending with \n)
+                buffer[total_read] = '\0';
+                if (strchr(buffer, '\n')) {
+                    LTE_DEBUG_UART("✅ Found complete NMEA sentences");
+                    break;
+                }
+            }
+        } else {
+            // No data available, small delay
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    }
+    
+    buffer[total_read] = '\0';  // Ensure null termination
+    *bytes_read = total_read;
+    
+    if (total_read > 0) {
+        LTE_DEBUG_UART("📄 Raw UART data (%d bytes): %.*s", total_read, (int)total_read, buffer);
+        return true;
+    } else {
+        LTE_DEBUG_UART("📭 No raw UART data available");
+        return false;
+    }
 }
 
 static bool lte_set_apn_impl(const char* apn, const char* username, const char* password)

@@ -4,11 +4,11 @@
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v5.5+-green.svg)](https://docs.espressif.com/projects/esp-idf/en/latest/)
 [![Hardware](https://img.shields.io/badge/hardware-ESP32--S3--SIM7670G-orange.svg)](https://www.waveshare.com/esp32-s3-sim7670g.htm)
 [![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-In%20Development-yellow)
-![GPS](https://img.shields.io/badge/GPS-Partial-yellow)
+[![Status](https://img.shields.io/badge/Status-GPS%20Restored-brightgreen)
+![GPS](https://img.shields.io/badge/GPS-Working-brightgreen)
 ![LTE](https://img.shields.io/badge/LTE-Working-brightgreen)
-![MQTT](https://img.shields.io/badge/MQTT-Failed-red)
-![Battery](https://img.shields.io/badge/Battery-Untested-lightgrey)](#)
+![MQTT](https://img.shields.io/badge/MQTT-Client%20Error-red)
+![Battery](https://img.shields.io/badge/Battery-Initialized-yellow)](#)
 
 > **🚧 DEVELOPMENT STATUS**: This project is in active development. Cellular connectivity is working, but MQTT and GPS functionality need further testing. The modular architecture is complete. Contributions welcome!
 
@@ -16,14 +16,15 @@ A modular GPS tracking device built for the ESP32-S3-SIM7670G development board,
 
 ## 🎯 Current Status & Features
 
-- ✅ **4G/LTE Cellular**: Network registration and connectivity working (confirmed with AT+CREG, AT+CSQ)
+- ✅ **4G/LTE Cellular**: Full connectivity working (signal, network registration, internet ping ~115ms)
 - ✅ **Modular Architecture**: Complete interface-based design with clean separation
 - ✅ **Debug Logging**: Comprehensive AT command logging and status reporting
-- ✅ **GPS Initialization**: GNSS powered on successfully using Waveshare official method
-- 🟡 **GPS Location Tracking**: Ready for outdoor testing (indoor satellite acquisition limited)
+- ✅ **GPS Module Fully Working**: Complete Waveshare implementation (AT+CGNSSPWR=1 + AT+CGNSSTST=1)
+- ✅ **GPS NMEA Output**: Data output enabled and confirmed (AT+CGNSSTST? returns 1)
+- 🟡 **GPS Satellite Fix**: Ready for outdoor testing (module searching for satellites)
 - 🟡 **Battery Monitoring**: MAX17048 initialization successful, full functionality needs verification  
-- ❌ **MQTT Data Transmission**: Service fails to start (AT+CMQTTSTART returns error) - Next priority
-- 🧪 **End-to-End Testing**: Full system integration testing required
+- ❌ **MQTT Client Acquisition**: AT+CMQTTACCQ fails - investigating client setup
+- 🧪 **End-to-End Testing**: GPS→MQTT pipeline ready for testing once MQTT resolved
 
 ## Overview
 

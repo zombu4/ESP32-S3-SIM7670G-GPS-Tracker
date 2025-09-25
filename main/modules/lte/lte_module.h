@@ -53,6 +53,7 @@ typedef struct {
     bool (*get_status)(lte_module_status_t* status);
     bool (*get_network_info)(lte_network_info_t* info);
     bool (*send_at_command)(const char* command, at_response_t* response, int timeout_ms);
+    bool (*read_raw_data)(char* buffer, size_t buffer_size, size_t* bytes_read, int timeout_ms);
     bool (*set_apn)(const char* apn, const char* username, const char* password);
     bool (*check_sim_ready)(void);
     bool (*get_signal_strength)(int* rssi, int* quality);

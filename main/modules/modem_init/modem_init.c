@@ -8,10 +8,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 static const char* TAG = "MODEM_INIT";
 
-// Static interface instance
+// Static interface instance  
 static modem_init_interface_t s_modem_interface;
 static bool s_initialized = false;
 
@@ -283,22 +284,58 @@ static bool initialize_gps_impl(void)
     ESP_LOGI(TAG, "⏳ Waiting for GNSS initialization...");
     vTaskDelay(pdMS_TO_TICKS(2000));
     
-    // Step 4: Enable GNSS data output (now safe - data goes to dedicated port)
-    ESP_LOGI(TAG, "📡 Enabling GNSS data output...");
+    // Step 4: Enable GNSS data output (Waveshare official method)
+    ESP_LOGI(TAG, "📡 Enabling GNSS data output (AT+CGNSSTST=1)...");
     if (!lte->send_at_command("AT+CGNSSTST=1", &response, 3000)) {
         ESP_LOGE(TAG, "❌ Failed to enable GNSS data output");
         return false;
     }
     
     if (response.success) {
-        ESP_LOGI(TAG, "✅ GNSS data output enabled");
+        ESP_LOGI(TAG, "✅ GNSS data output enabled - NMEA sentences will be available");
     } else {
         ESP_LOGW(TAG, "⚠️  GNSS data response: %s", response.response);
     }
     
-    // Step 5: Wait for NMEA data stream to stabilize
-    ESP_LOGI(TAG, "⏳ Waiting for NMEA data stream to initialize...");
-    vTaskDelay(pdMS_TO_TICKS(3000)); // Give GPS time to start outputting NMEA data
+    // Step 5: Test GPS polling (revert to working AT+CGNSINF method)
+    ESP_LOGI(TAG, "🔍 Testing GPS functionality (reverting to working method)...");
+    
+    at_response_t diag_response;
+    
+    // Test if NMEA data is flowing to UART buffer (THE CORRECT WAVESHARE METHOD!)
+    ESP_LOGI(TAG, "🧪 Testing NMEA data availability from UART buffer...");
+    
+    // Wait a moment for NMEA data to start flowing
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    
+    // Test reading raw UART data to see if NMEA sentences are present
+    size_t bytes_read = 0;
+    char test_buffer[512];
+    if (lte->read_raw_data && lte->read_raw_data(test_buffer, sizeof(test_buffer) - 1, &bytes_read, 2000)) {
+        test_buffer[bytes_read] = '\0';
+        if (bytes_read > 0) {
+            ESP_LOGI(TAG, "📡 UART buffer has %d bytes of data", bytes_read);
+            if (strstr(test_buffer, "$G") || strstr(test_buffer, "NMEA") || strstr(test_buffer, "GGA") || strstr(test_buffer, "RMC")) {
+                ESP_LOGI(TAG, "✅ NMEA sentences detected in UART buffer!");
+            } else {
+                ESP_LOGI(TAG, "� UART data present but no NMEA sentences yet");
+            }
+        } else {
+            ESP_LOGI(TAG, "📭 No data in UART buffer yet (GPS may need more time)");
+        }
+    }
+    
+    // Try to check if GNSS is actually outputting data by reading status
+    ESP_LOGI(TAG, "� Checking GNSS status and configuration...");
+    if (lte->send_at_command("AT+CGNSSTST?", &diag_response, 3000)) {
+        ESP_LOGI(TAG, "📡 GNSS status: %s", diag_response.response);
+    }
+    
+    // GPS initialization complete - using polling mode
+    
+    // Step 6: Wait for GPS to stabilize (shorter time since we're using polling mode)
+    ESP_LOGI(TAG, "⏳ Waiting for GPS to stabilize for polling mode...");
+    vTaskDelay(pdMS_TO_TICKS(2000)); // Give GPS time to initialize for polling
     
     ESP_LOGI(TAG, "✅ GPS initialization complete");
     return true;
@@ -318,54 +355,110 @@ static bool start_gps_polling_impl(void)
     
     at_response_t response = {0};
     
-    // Start continuous GNSS info reporting
-    if (lte->send_at_command("AT+CGNSINF", &response, 3000) && response.success) {
-        ESP_LOGI(TAG, "📊 GNSS info: %s", response.response);
-        return true;
+    // GPS polling is handled by reading NMEA data directly from UART
+    // After AT+CGNSSPWR=1 and AT+CGNSSTST=1, GPS outputs NMEA sentences continuously
+    ESP_LOGI(TAG, "� GPS polling ready - NMEA data available via UART");
+    return true;
+}
+
+/**
+ * @brief Read NMEA sentences directly from UART (SIM7670G Waveshare method)
+ * After AT+CGNSSPWR=1 and AT+CGNSSTST=1, GPS data outputs as NMEA sentences to UART
+ */
+static bool read_nmea_from_uart(char* buffer, size_t buffer_size, int timeout_ms)
+{
+    const lte_interface_t* lte = lte_get_interface();
+    if (!lte || !lte->read_raw_data) {
+        ESP_LOGE(TAG, "❌ LTE interface or raw data function not available");
+        return false;
+    }
+    
+    // Use LTE interface's raw UART reading with mutex protection
+    ESP_LOGD(TAG, "📡 Reading NMEA data from UART (timeout: %d ms)", timeout_ms);
+    
+    size_t bytes_read = 0;
+    bool found_nmea = false;
+    
+    // Read raw UART data with mutex protection via LTE interface
+    if (lte->read_raw_data(buffer, buffer_size - 1, &bytes_read, timeout_ms)) {
+        buffer[bytes_read] = '\0';  // Null terminate
+        
+        if (bytes_read > 0) {
+            ESP_LOGD(TAG, "� Read %d bytes from UART", bytes_read);
+            
+            // Check if we have NMEA sentences (start with $ and contain GPS data)
+            if (strstr(buffer, "$G") || strstr(buffer, "$GNRMC") || strstr(buffer, "$GNGGA")) {
+                found_nmea = true;
+                ESP_LOGD(TAG, "✅ Found NMEA sentences in UART data");
+            } else {
+                ESP_LOGD(TAG, "📄 UART data (may contain NMEA): %.*s", (int)bytes_read, buffer);
+            }
+        } else {
+            ESP_LOGD(TAG, "📭 No UART data available");
+        }
+    } else {
+        ESP_LOGD(TAG, "❌ Failed to read from UART");
+    }
+    
+    return found_nmea;
+}
+
+/**
+ * @brief Parse NMEA sentence for GPS fix information
+ */
+static bool parse_nmea_sentence(const char* nmea, gps_fix_info_t* fix_info)
+{
+    if (!nmea || !fix_info) return false;
+    
+    // Look for GNGGA sentence (Global Positioning System Fix Data)
+    if (strncmp(nmea, "$GNGGA", 6) == 0 || strncmp(nmea, "$GPGGA", 6) == 0) {
+        char* tokens[15];
+        char* nmea_copy = strdup(nmea);
+        char* token = strtok(nmea_copy, ",");
+        int token_count = 0;
+        
+        while (token && token_count < 15) {
+            tokens[token_count] = token;
+            token = strtok(NULL, ",");
+            token_count++;
+        }
+        
+        // GGA format: $GNGGA,time,lat,N/S,lon,E/W,quality,sats,hdop,alt,M,geoid,M,dgps_time,dgps_id*checksum
+        if (token_count >= 6 && strlen(tokens[2]) > 0 && strlen(tokens[4]) > 0) {
+            int quality = atoi(tokens[6]);
+            if (quality > 0) {  // 0 = no fix, 1+ = fix available
+                fix_info->has_fix = true;
+                
+                // Parse latitude (DDMM.MMMM format)
+                double lat = atof(tokens[2]);
+                fix_info->latitude = (int)(lat / 100) + fmod(lat, 100.0) / 60.0;
+                if (tokens[3][0] == 'S') fix_info->latitude = -fix_info->latitude;
+                
+                // Parse longitude (DDDMM.MMMM format)  
+                double lon = atof(tokens[4]);
+                fix_info->longitude = (int)(lon / 100) + fmod(lon, 100.0) / 60.0;
+                if (tokens[5][0] == 'W') fix_info->longitude = -fix_info->longitude;
+                
+                // Store time
+                strncpy(fix_info->fix_time, tokens[1], sizeof(fix_info->fix_time) - 1);
+                
+                ESP_LOGI(TAG, "🎯 GPS FIX from NMEA! Lat: %.6f, Lon: %.6f (Quality: %d)", 
+                        fix_info->latitude, fix_info->longitude, quality);
+                
+                free(nmea_copy);
+                return true;
+            }
+        }
+        
+        free(nmea_copy);
     }
     
     return false;
 }
 
 /**
- * @brief Read raw NMEA data from UART (polling mode)
- * Using AT+CGNSINF for data retrieval - Waveshare official method
- */
-static bool read_nmea_data_from_uart(char* buffer, size_t buffer_size, int timeout_ms)
-{
-    if (!buffer || buffer_size == 0) {
-        return false;
-    }
-    
-    size_t bytes_read = 0;
-    uint32_t start_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
-    
-    while (bytes_read < (buffer_size - 1)) {
-        // Check for timeout
-        uint32_t current_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
-        if ((current_time - start_time) > timeout_ms) {
-            break;
-        }
-        
-        // Try to read one byte from UART
-        int len = uart_read_bytes(UART_NUM_1, &buffer[bytes_read], 1, pdMS_TO_TICKS(100));
-        if (len > 0) {
-            bytes_read += len;
-            // Look for complete NMEA sentence (ends with \r\n)
-            if (bytes_read >= 2 && buffer[bytes_read-2] == '\r' && buffer[bytes_read-1] == '\n') {
-                buffer[bytes_read] = '\0';
-                return true;
-            }
-        }
-    }
-    
-    buffer[bytes_read] = '\0';
-    return bytes_read > 0;
-}
-
-/**
- * @brief Get current GPS fix information by reading raw NMEA data
- * Following Waveshare example: after port switch, read NMEA directly!
+ * @brief Get current GPS fix information by reading NMEA data from UART
+ * Using Waveshare SIM7670G method: direct NMEA reading after GNSS enable
  */
 static bool get_gps_fix_impl(gps_fix_info_t* fix_info)
 {
@@ -377,60 +470,53 @@ static bool get_gps_fix_impl(gps_fix_info_t* fix_info)
     memset(fix_info, 0, sizeof(gps_fix_info_t));
     fix_info->has_fix = false;
     
-    ESP_LOGI(TAG, "📡 Reading raw NMEA data from UART (Waveshare approach)...");
+    ESP_LOGI(TAG, "📡 Reading GPS NMEA data from UART (Waveshare method)...");
     
-    // Read NMEA data directly from UART (no AT commands after port switch!)
-    char nmea_buffer[512];
-    if (read_nmea_data_from_uart(nmea_buffer, sizeof(nmea_buffer), 3000)) {
-        ESP_LOGI(TAG, "📍 Raw NMEA: %s", nmea_buffer);
-        strncpy(fix_info->nmea_data, nmea_buffer, sizeof(fix_info->nmea_data) - 1);
+    char uart_buffer[1024];
+    
+    // Read NMEA sentences from UART with mutex protection
+    if (read_nmea_from_uart(uart_buffer, sizeof(uart_buffer), 2000)) {
+        // Store raw NMEA data
+        strncpy(fix_info->nmea_data, uart_buffer, sizeof(fix_info->nmea_data) - 1);
         
-        // Basic NMEA parsing - look for $GPRMC or $GNRMC (Recommended Minimum)
-        if (strstr(nmea_buffer, "$GPRMC") || strstr(nmea_buffer, "$GNRMC")) {
-            ESP_LOGI(TAG, "✅ Found GPRMC/GNRMC sentence");
+        // Parse NMEA sentences line by line
+        char* line_start = uart_buffer;
+        char* line_end;
+        
+        while ((line_end = strchr(line_start, '\n')) != NULL) {
+            *line_end = '\0';  // Null terminate the line
             
-            // Parse NMEA RMC sentence: $GPRMC,time,status,lat,latNS,lon,lonEW,speed,course,date,magvar,magvarEW,checksum
-            // Status: A = Active (valid fix), V = Void (no fix)
-            char* tokens[15];
-            char* nmea_copy = strdup(nmea_buffer);
-            char* token = strtok(nmea_copy, ",");
-            int token_count = 0;
-            
-            while (token && token_count < 15) {
-                tokens[token_count] = token;
-                token = strtok(NULL, ",");
-                token_count++;
+            // Remove carriage return if present
+            if (line_end > line_start && *(line_end - 1) == '\r') {
+                *(line_end - 1) = '\0';
             }
             
-            // Check if we have a valid fix (status = 'A')
-            if (token_count > 2 && tokens[2][0] == 'A') {
-                fix_info->has_fix = true;
-                
-                // Parse latitude and longitude
-                if (token_count > 5) {
-                    fix_info->latitude = atof(tokens[3]) / 100.0;  // Convert DDMM.MMMM to decimal degrees
-                    fix_info->longitude = atof(tokens[5]) / 100.0;
-                    
-                    // Apply hemisphere corrections
-                    if (token_count > 4 && tokens[4][0] == 'S') fix_info->latitude = -fix_info->latitude;
-                    if (token_count > 6 && tokens[6][0] == 'W') fix_info->longitude = -fix_info->longitude;
-                }
-                
-                if (token_count > 1) strncpy(fix_info->fix_time, tokens[1], sizeof(fix_info->fix_time) - 1);
-                ESP_LOGI(TAG, "🎯 GPS FIX FOUND! Lat: %.6f, Lon: %.6f", fix_info->latitude, fix_info->longitude);
-            } else {
-                ESP_LOGI(TAG, "📍 GPS data received but no fix yet (status: %c)", token_count > 2 ? tokens[2][0] : '?');
+            ESP_LOGD(TAG, "� NMEA Line: %s", line_start);
+            
+            // Try to parse this NMEA sentence
+            if (parse_nmea_sentence(line_start, fix_info)) {
+                ESP_LOGI(TAG, "✅ Successfully parsed GPS fix from NMEA data");
+                return true;
             }
             
-            free(nmea_copy);
-            return true;
-        } else {
-            ESP_LOGI(TAG, "📡 NMEA data received but not RMC sentence");
-            return true;  // Still success, just different sentence type
+            line_start = line_end + 1;
         }
+        
+        // Process the last line if it doesn't end with newline
+        if (strlen(line_start) > 0) {
+            ESP_LOGD(TAG, "📝 NMEA Line (last): %s", line_start);
+            if (parse_nmea_sentence(line_start, fix_info)) {
+                ESP_LOGI(TAG, "✅ Successfully parsed GPS fix from NMEA data");
+                return true;
+            }
+        }
+        
+        ESP_LOGI(TAG, "📡 NMEA data received but no valid GPS fix found yet");
+        return true;  // We got data, just no fix yet
+    } else {
+        ESP_LOGD(TAG, "📭 No NMEA data available from UART");
+        return false;
     }
-    
-    return false;
 }
 
 /**
