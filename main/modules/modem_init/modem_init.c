@@ -37,7 +37,7 @@ static bool test_modem_ready_impl(void)
     ESP_LOGI(TAG, "🔧 Testing modem readiness...");
     
     // Get LTE interface for AT commands
-    lte_interface_t* lte = lte_get_interface();
+    const lte_interface_t* lte = lte_get_interface();
     if (!lte) {
         ESP_LOGE(TAG, "❌ Failed to get LTE interface");
         return false;
@@ -106,7 +106,7 @@ static bool test_modem_ready_impl(void)
  */
 static modem_status_t get_modem_status_impl(void)
 {
-    lte_interface_t* lte = lte_get_interface();
+    const lte_interface_t* lte = lte_get_interface();
     if (!lte) {
         return MODEM_STATUS_FAILED;
     }
@@ -142,7 +142,7 @@ static bool wait_for_network_impl(int timeout_seconds)
 {
     ESP_LOGI(TAG, "⏳ Waiting for network registration (timeout: %d seconds)...", timeout_seconds);
     
-    lte_interface_t* lte = lte_get_interface();
+    const lte_interface_t* lte = lte_get_interface();
     if (!lte) {
         return false;
     }
@@ -188,7 +188,7 @@ static bool test_connectivity_impl(const char* host, network_test_result_t* resu
     
     ESP_LOGI(TAG, "🌐 Testing connectivity to %s...", host);
     
-    lte_interface_t* lte = lte_get_interface();
+    const lte_interface_t* lte = lte_get_interface();
     if (!lte) {
         strcpy(result->error_message, "LTE interface not available");
         return false;
@@ -256,7 +256,7 @@ static bool initialize_gps_impl(void)
 {
     ESP_LOGI(TAG, "🛰️ Initializing GPS (SIM7670G GNSS)...");
     
-    lte_interface_t* lte = lte_get_interface();
+    const lte_interface_t* lte = lte_get_interface();
     if (!lte) {
         ESP_LOGE(TAG, "❌ LTE interface not available for GPS");
         return false;
@@ -264,22 +264,9 @@ static bool initialize_gps_impl(void)
     
     at_response_t response = {0};
     
-    // Step 1: CRITICAL - Switch GNSS to UART port FIRST (before enabling data output)
-    // This prevents NMEA data from interfering with AT commands
-    ESP_LOGI(TAG, "🔀 Switching GNSS to dedicated UART port (FIRST - prevent AT interference)...");
-    if (!lte->send_at_command("AT+CGNSSPORTSWITCH=0,1", &response, 3000)) {
-        ESP_LOGE(TAG, "❌ Failed to switch GNSS port");
-        return false;
-    }
-    
-    if (response.success) {
-        ESP_LOGI(TAG, "✅ GNSS port switched to UART - AT commands now safe");
-    } else {
-        ESP_LOGW(TAG, "⚠️  GNSS port switch response: %s", response.response);
-    }
-    
-    // Step 2: Power on GNSS (as per Waveshare documentation)
-    ESP_LOGI(TAG, "🔌 Powering on GNSS module...");
+    // Step 1: Power on GNSS (as per Waveshare documentation)
+    // NOTE: Removed AT+CGNSSPORTSWITCH - not documented in official Waveshare reference
+    ESP_LOGI(TAG, "🔌 Powering on GNSS module (Waveshare official method)...");
     if (!lte->send_at_command("AT+CGNSSPWR=1", &response, 5000)) {
         ESP_LOGE(TAG, "❌ Failed to power on GNSS");
         return false;
@@ -324,7 +311,7 @@ static bool start_gps_polling_impl(void)
 {
     ESP_LOGI(TAG, "🔄 Starting GPS polling...");
     
-    lte_interface_t* lte = lte_get_interface();
+    const lte_interface_t* lte = lte_get_interface();
     if (!lte) {
         return false;
     }
@@ -341,8 +328,8 @@ static bool start_gps_polling_impl(void)
 }
 
 /**
- * @brief Read raw NMEA data from UART (after AT+CGNSSPORTSWITCH=0,1)
- * Following Waveshare Arduino example - no more AT commands after port switch!
+ * @brief Read raw NMEA data from UART (polling mode)
+ * Using AT+CGNSINF for data retrieval - Waveshare official method
  */
 static bool read_nmea_data_from_uart(char* buffer, size_t buffer_size, int timeout_ms)
 {
@@ -541,7 +528,7 @@ static void reset_modem_impl(void)
 {
     ESP_LOGI(TAG, "🔄 Resetting modem...");
     
-    lte_interface_t* lte = lte_get_interface();
+    const lte_interface_t* lte = lte_get_interface();
     if (lte) {
         at_response_t response = {0};
         lte->send_at_command("AT+CFUN=1,1", &response, 10000);

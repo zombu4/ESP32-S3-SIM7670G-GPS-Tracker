@@ -4,8 +4,8 @@
 // Project Version Information
 #define PROJECT_VERSION_MAJOR 1
 #define PROJECT_VERSION_MINOR 0  
-#define PROJECT_VERSION_PATCH 0
-#define PROJECT_VERSION_STRING "1.0.0"
+#define PROJECT_VERSION_PATCH 1
+#define PROJECT_VERSION_STRING "1.0.1"
 
 // Build Information
 #define PROJECT_NAME "ESP32-S3-SIM7670G GPS Tracker"

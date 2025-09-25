@@ -1,4 +1,4 @@
-idf_component_register(SRCS "gps_tracker.c" "config.c" "version.c" "baud_rate_tester.c"
+idf_component_register(SRCS "gps_tracker.c" "config.c" "version.c" "baud_rate_tester.c" "task_manager.c"
                            "modules/gps/gps_module.c"
                            "modules/lte/lte_module.c" 
                            "modules/mqtt/mqtt_module.c"

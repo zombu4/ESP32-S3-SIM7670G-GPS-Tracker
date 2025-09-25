@@ -42,7 +42,6 @@ static void gps_set_debug_impl(bool enable);
 static bool send_gps_at_command(const char* command, char* response, size_t response_size, int timeout_ms);
 static bool gps_enable_gnss(void);
 static bool gps_disable_gnss(void);
-static bool gps_start_output(void);
 static bool gps_stop_output(void);
 
 // Ring buffer functions (4KB GPS data buffer)
@@ -107,7 +106,7 @@ static void ring_buffer_deinit(void)
     ESP_LOGI(TAG, "GPS ring buffer deinitialized");
 }
 
-static bool ring_buffer_write(const char* data, size_t len)
+static bool __attribute__((unused)) ring_buffer_write(const char* data, size_t len)
 {
     if (!data || len == 0 || !gps_buffer.mutex) {
         return false;
@@ -133,7 +132,7 @@ static bool ring_buffer_write(const char* data, size_t len)
     return true;
 }
 
-static size_t ring_buffer_read(char* buffer, size_t max_len)
+static size_t __attribute__((unused)) ring_buffer_read(char* buffer, size_t max_len)
 {
     if (!buffer || max_len == 0 || !gps_buffer.mutex) {
         return 0;
@@ -155,7 +154,7 @@ static size_t ring_buffer_read(char* buffer, size_t max_len)
     return bytes_read;
 }
 
-static size_t ring_buffer_available(void)
+static size_t __attribute__((unused)) ring_buffer_available(void)
 {
     if (!gps_buffer.mutex) {
         return 0;
@@ -170,7 +169,7 @@ static size_t ring_buffer_available(void)
     return available;
 }
 
-static void ring_buffer_clear(void)
+static void __attribute__((unused)) ring_buffer_clear(void)
 {
     if (!gps_buffer.mutex) {
         return;
@@ -223,12 +222,8 @@ static bool gps_init_impl(const gps_config_t* config)
         return false;
     }
     
-    // Start GNSS data output
-    if (!gps_start_output()) {
-        ESP_LOGE(TAG, "Failed to start GNSS data output");
-        gps_deinit_impl();
-        return false;
-    }
+    // NO auto data output - polling only mode to avoid UART collisions
+    ESP_LOGI(TAG, "✅ GNSS enabled for POLLING ONLY - no auto output to prevent collisions");
     
     if (config->debug_output) {
         ESP_LOGI(TAG, "GPS module initialized successfully with AT commands");
@@ -268,7 +263,7 @@ static bool gps_read_data_impl(gps_data_t* data)
         return false;
     }
     
-    // Use LTE module's AT interface to get NMEA data
+    // Use LTE module's AT interface to get GNSS data via polling ONLY
     const lte_interface_t* lte = lte_get_interface();
     if (!lte || !lte->send_at_command) {
         ESP_LOGE(TAG, "LTE module AT interface not available");
@@ -284,18 +279,23 @@ static bool gps_read_data_impl(gps_data_t* data)
     // Clear data structure
     memset(data, 0, sizeof(gps_data_t));
     
-    // Send AT command to get NMEA data
+    // Poll GNSS data using AT+CGNSINF (Waveshare recommended polling command)
+    // This command returns location info without continuous output
     at_response_t response = {0};
     bool has_data = false;
     
-    // Try to get NMEA data (this might require a specific AT command to query current location)
-    // For now, simulate having data and focus on parsing if we have any
-    if (lte->send_at_command("AT+CGNSINF", &response, 2000)) {
-        if (response.response[0] != '\0') {
+    ESP_LOGD(TAG, "📍 Polling GNSS location data (AT+CGNSINF)");
+    if (lte->send_at_command("AT+CGNSINF", &response, 3000)) {
+        if (response.response[0] != '\0' && strstr(response.response, "+CGNSINF:") != NULL) {
             strncpy(buffer, response.response, 1023);
             buffer[1023] = '\0';
             has_data = true;
+            ESP_LOGD(TAG, "✅ GNSS poll response: %s", buffer);
+        } else {
+            ESP_LOGW(TAG, "❌ No GNSS data in poll response");
         }
+    } else {
+        ESP_LOGE(TAG, "❌ GNSS polling failed (AT+CGNSINF)");
     }
     
     if (has_data) {
@@ -367,17 +367,20 @@ static bool gps_power_on_impl(void)
         return true;
     }
     
-    // Enable GNSS power
+    // Enable GNSS power ONLY - no auto output (polling mode)
     if (!gps_enable_gnss()) {
         ESP_LOGE(TAG, "Failed to enable GNSS power");
         return false;
     }
     
-    // Start data output
-    if (!gps_start_output()) {
-        ESP_LOGE(TAG, "Failed to start GNSS data output");
-        return false;
-    }
+    // Wait for GNSS to stabilize (shorter wait for polling mode)
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    
+    // DO NOT start automatic data output - we will poll with AT+CGNSINF
+    ESP_LOGI(TAG, "📍 GNSS enabled in POLLING-ONLY mode - no auto output");
+    
+    // Port switching not needed - GNSS powered on via AT+CGNSSPWR=1
+    // Polling works directly via AT+CGNSINF (Waveshare official method)
     
     module_status.gps_power_on = true;
     ESP_LOGI(TAG, "GPS power on successful");
@@ -390,10 +393,11 @@ static bool gps_power_off_impl(void)
         return true;
     }
     
-    // Stop data output
-    gps_stop_output();
+    // No port switching needed - just power off GNSS
+    vTaskDelay(pdMS_TO_TICKS(500));
     
-    // Disable GNSS power
+    // No need to stop data output - we never started auto output
+    // Just disable GNSS power
     gps_disable_gnss();
     
     module_status.gps_power_on = false;
@@ -691,23 +695,8 @@ static bool gps_disable_gnss(void)
     return true;
 }
 
-static bool gps_start_output(void)
-{
-    char response[256];
-    
-    // Send AT+CGNSSTST=1 (Open GNSS data output) - Waveshare documentation
-    if (!send_gps_at_command("AT+CGNSSTST=1", response, sizeof(response), 3000)) {
-        ESP_LOGE(TAG, "Failed to start GNSS data output");
-        return false;
-    }
-    
-    if (current_config.debug_output) {
-        ESP_LOGI(TAG, "GNSS data output started");
-    }
-    
-    module_status.data_output_enabled = true;
-    return true;
-}
+// gps_start_output() removed - auto-output disabled to prevent UART collisions
+// Use polling with AT+CGNSINF instead of AT+CGNSSTST=1
 
 static bool gps_stop_output(void)
 {

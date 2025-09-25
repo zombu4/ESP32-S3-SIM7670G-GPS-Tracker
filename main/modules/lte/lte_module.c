@@ -3,6 +3,7 @@
 #include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_task_wdt.h"
 #include "string.h"
 #include "stdlib.h"
 
@@ -187,10 +188,34 @@ static bool lte_init_impl(const lte_config_t* config)
     
     // Wait for SIM7670G module to be ready (Waveshare recommends delay after UART init)
     vTaskDelay(pdMS_TO_TICKS(3000));
+    esp_task_wdt_reset();  // Reset watchdog after delay
+    
+    // ===================================================================
+    // CRITICAL: GPS Port Switching FIRST (before any AT commands!)
+    // The SIM7670G boots with GPS enabled by default, interfering with AT
+    // ===================================================================
+    ESP_LOGI(TAG, "🔧 Disabling GPS interference BEFORE AT communication...");
+    
+    // Send raw AT commands to disable GPS without error checking (GPS might be active)
+    uart_flush_input(UART_NUM_1);
+    uart_write_bytes(UART_NUM_1, "AT+CGNSSPWR=0\r\n", 15);
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_task_wdt_reset();  // Reset watchdog
+    uart_flush_input(UART_NUM_1);
+    
+    uart_write_bytes(UART_NUM_1, "AT+CGNSSTST=0\r\n", 15);  
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    uart_flush_input(UART_NUM_1);
+    
+    // Removed AT+CGNSSPORTSWITCH - not documented in Waveshare official reference
+    esp_task_wdt_reset();  // Reset watchdog
+    
+    ESP_LOGI(TAG, "✅ GPS interference disabled - AT commands should work now");
     
     // Test AT communication
     at_response_t response;
     for (int i = 0; i < current_config.max_retries; i++) {
+        esp_task_wdt_reset();  // Reset watchdog in retry loop
         if (lte_send_at_command_impl("AT", &response, 2000)) {
             break;
         }
@@ -201,15 +226,17 @@ static bool lte_init_impl(const lte_config_t* config)
         }
     }
     
-    // Set full functionality
-    if (!lte_send_at_command_impl("AT+CFUN=1", &response, 10000)) {
+    // Set full functionality (reduced timeout to prevent watchdog)
+    esp_task_wdt_reset();  // Reset before long command
+    if (!lte_send_at_command_impl("AT+CFUN=1", &response, 5000)) {
         ESP_LOGE(TAG, "Failed to set full functionality");
         return false;
     }
+    esp_task_wdt_reset();  // Reset after long command
     
     vTaskDelay(pdMS_TO_TICKS(2000));
     
-    // Check SIM status
+    // Check SIM status (GPS interference should be disabled by now)
     if (!lte_check_sim_ready_impl()) {
         ESP_LOGE(TAG, "SIM card not ready");
         return false;

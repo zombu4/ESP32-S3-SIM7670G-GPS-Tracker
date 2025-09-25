@@ -5,12 +5,14 @@
 #include "freertos/timers.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "nvs_flash.h"
 #include "cJSON.h"
 
 // Include configuration and modules
 #include "config.h"
 #include "version.h"
+#include "task_manager.h"
 #include "modules/gps/gps_module.h"
 #include "modules/lte/lte_module.h"
 #include "modules/mqtt/mqtt_module.h"
@@ -36,6 +38,7 @@ static battery_data_t last_battery_data = {0};
 // Function prototypes
 static void transmission_timer_callback(TimerHandle_t xTimer);
 static void data_collection_task(void *pvParameters);
+void data_aggregation_task(void* params);
 static bool initialize_modules(void);
 static char* create_json_payload(const gps_data_t* gps, const battery_data_t* battery);
 
@@ -93,18 +96,44 @@ void app_main(void)
     
     ESP_LOGI(TAG, "GPS Tracker initialization complete");
     
-    // Main task monitors system health and handles events
-    while (1) {
-        ESP_LOGI(TAG, "System running - GPS: %s, Battery: %.1f%%", 
-                 last_gps_data.fix_valid ? "VALID" : "NO FIX",
-                 last_battery_data.percentage);
+    // Task watchdog is initialized by task manager - no need to initialize here
+    
+    // Get task manager interface and start dual-core tasks
+    const task_manager_t* task_mgr = task_manager_get_interface();
+    if (task_mgr && task_mgr->init() && task_mgr->start_all_tasks()) {
+        ESP_LOGI(TAG, "✅ Dual-core task system started!");
         
-        // Check for critical battery level
-        if (last_battery_data.present && last_battery_data.percentage <= 5.0f) {
-            ESP_LOGW(TAG, "Critical battery level detected!");
+        // Start data aggregation task on Core 0 (with MQTT)
+        xTaskCreatePinnedToCore(
+            data_aggregation_task,
+            "data_aggregator",
+            4096,
+            (void*)task_mgr,
+            PRIORITY_NORMAL,
+            NULL,
+            PROTOCOL_CORE
+        );
+        ESP_LOGI(TAG, "✅ Data aggregation task started on Core 0");
+        
+    } else {
+        ESP_LOGE(TAG, "❌ Failed to start dual-core task system");
+    }
+    
+    // Main supervision task - lightweight monitoring only
+    // Remove unused variables - data is now handled by task manager
+    uint32_t status_counter = 0;
+    
+    while (1) {
+        // Feed watchdog
+        esp_task_wdt_reset();
+        
+        // Non-blocking status monitoring
+        if (task_mgr && status_counter % 12 == 0) {  // Every minute with 5s delay
+            ESP_LOGI(TAG, "🚀 System running on dual cores - All operations non-blocking");
         }
         
-        vTaskDelay(pdMS_TO_TICKS(60000)); // Log status every minute
+        status_counter++;
+        vTaskDelay(pdMS_TO_TICKS(5000));  // 5 second intervals - non-blocking
     }
 }
 
@@ -281,4 +310,91 @@ static char* create_json_payload(const gps_data_t* gps, const battery_data_t* ba
     cJSON_Delete(root);
     
     return json_string;
+}
+
+/**
+ * @brief Data aggregation task - collects data from queues and publishes via MQTT
+ * Runs on Core 0 (Protocol Core) alongside MQTT task
+ */
+void data_aggregation_task(void* params)
+{
+    const task_manager_t* task_mgr = (const task_manager_t*)params;
+    ESP_LOGI(TAG, "📊 [Core 0] Data Aggregation Task started");
+    
+    gps_data_t gps_data = {0};
+    battery_data_t battery_data = {0};
+    bool have_gps = false;
+    bool have_battery = false;
+    
+    uint32_t last_publish_time = 0;
+    const uint32_t publish_interval_ms = system_config.system.transmission_interval_ms;
+    
+    while (task_mgr->tasks_running) {
+        // Collect GPS data (non-blocking)
+        if (xQueueReceive(task_mgr->gps_data_queue, &gps_data, pdMS_TO_TICKS(100)) == pdTRUE) {
+            have_gps = true;
+            ESP_LOGD(TAG, "📍 Received GPS data: %.6f,%.6f (%d sats)", 
+                     gps_data.latitude, gps_data.longitude, gps_data.satellites);
+        }
+        
+        // Collect battery data (non-blocking)
+        if (xQueueReceive(task_mgr->battery_data_queue, &battery_data, pdMS_TO_TICKS(10)) == pdTRUE) {
+            have_battery = true;
+            ESP_LOGD(TAG, "🔋 Received battery data: %.1f%% (%.2fV)", 
+                     battery_data.percentage, battery_data.voltage);
+        }
+        
+        // Publish data at regular intervals
+        uint32_t current_time = esp_log_timestamp();
+        if (have_gps && have_battery && 
+            (current_time - last_publish_time) >= publish_interval_ms) {
+            
+            // Create JSON payload
+            cJSON* root = cJSON_CreateObject();
+            cJSON_AddNumberToObject(root, "timestamp", current_time / 1000);
+            cJSON_AddStringToObject(root, "device_id", "esp32_gps_tracker");
+            
+            // Add GPS data
+            cJSON* gps_obj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(gps_obj, "latitude", gps_data.latitude);
+            cJSON_AddNumberToObject(gps_obj, "longitude", gps_data.longitude);
+            cJSON_AddNumberToObject(gps_obj, "altitude", gps_data.altitude);
+            cJSON_AddNumberToObject(gps_obj, "speed", gps_data.speed_kmh);
+            cJSON_AddNumberToObject(gps_obj, "satellites", gps_data.satellites);
+            cJSON_AddBoolToObject(gps_obj, "valid_fix", gps_data.fix_valid);
+            cJSON_AddItemToObject(root, "gps", gps_obj);
+            
+            // Add battery data
+            cJSON* battery_obj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(battery_obj, "percentage", battery_data.percentage);
+            cJSON_AddNumberToObject(battery_obj, "voltage", battery_data.voltage);
+            cJSON_AddBoolToObject(battery_obj, "charging", battery_data.charging);
+            // Calculate low/critical battery status
+            bool low_battery = battery_data.percentage < 15.0f;
+            bool critical_battery = battery_data.percentage < 5.0f;
+            cJSON_AddBoolToObject(battery_obj, "low_battery", low_battery);
+            cJSON_AddBoolToObject(battery_obj, "critical_battery", critical_battery);
+            cJSON_AddItemToObject(root, "battery", battery_obj);
+            
+            // Convert to string and publish
+            char* json_string = cJSON_Print(root);
+            if (json_string) {
+                if (task_mgr->publish_mqtt(system_config.mqtt.topic, json_string, 0)) {
+                    ESP_LOGI(TAG, "📤 Data published successfully");
+                    last_publish_time = current_time;
+                } else {
+                    ESP_LOGW(TAG, "⚠️  Failed to publish data");
+                }
+                free(json_string);
+            }
+            cJSON_Delete(root);
+        }
+        
+        // Feed watchdog and yield
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(500));  // Check for data every 500ms
+    }
+    
+    ESP_LOGI(TAG, "🛑 [Core 0] Data Aggregation Task stopped");
+    vTaskDelete(NULL);
 }

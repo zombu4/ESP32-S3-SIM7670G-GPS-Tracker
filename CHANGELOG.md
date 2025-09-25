@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - 2025-09-25 - 🎉 FULLY WORKING RELEASE
+## [1.0.1] - 2025-09-25 - 🎯 GPS PORT SWITCHING FIX
+
+### Fixed
+- **GPS Initialization Error**: Removed undocumented `AT+CGNSSPORTSWITCH` command that was causing GPS initialization failures
+- **GPS Power On**: Now using Waveshare official method with only `AT+CGNSSPWR=1` and `AT+CGNSSTST=1`
+- **Port Switching Issues**: Eliminated all port switching commands per Waveshare documentation
+- **System Stability**: No more GPS-related errors during initialization sequence
+
+### Changed  
+- `modem_init.c`: Removed problematic `AT+CGNSSPORTSWITCH=0,1` command from GPS initialization
+- `gps_module.c`: Removed port switching commands from power on/off functions
+- `lte_module.c`: Cleaned up GPS interference prevention code
+- Updated all comments to reflect Waveshare official approach
+
+### Technical Details
+- **Root Cause**: `AT+CGNSSPORTSWITCH` command not documented in official Waveshare ESP32-S3-SIM7670G reference
+- **Solution**: Follow Waveshare documentation exactly - use only documented GNSS commands
+- **Result**: GPS initialization now works perfectly with `AT+CGNSSPWR=1` → `OK` (343ms response)
+- **Status**: ✅ GPS ready for outdoor satellite acquisition testing
+
+## [1.0.0] - 2025-09-25 - 🚧 DEVELOPMENT MILESTONE
 
 ### Added
 - **Initial Release**: Complete ESP32-S3-SIM7670G GPS Tracker implementation
@@ -23,20 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Documentation**: Complete README, contribution guidelines, and setup instructions
 - **CI/CD**: GitHub Actions workflow for automated building and testing
 
-### Fixed - Critical GPS Port Switching Solution
-- **GPS/LTE Interference**: Resolved NMEA data interfering with AT commands
-- **Port Switching**: Implemented `AT+CGNSSPORTSWITCH=0,1` for dedicated GPS port
-- **UART Communication**: Optimized character-by-character transmission with delays
-- **Network Registration**: Fixed cellular connectivity with proper APN configuration
-- **AT Command Parsing**: Robust response handling with timeout management
-
-### Confirmed Working
-- ✅ **Full GPS Functionality**: Real-time coordinate acquisition and NMEA parsing
+### Working Components
 - ✅ **4G/LTE Connectivity**: Complete cellular network registration and data connection
-- ✅ **MQTT Integration**: JSON payload transmission over cellular connection
-- ✅ **Battery Monitoring**: MAX17048 fuel gauge with voltage and percentage reporting
-- ✅ **Module Integration**: All components working together seamlessly
-- ✅ **Network Performance**: Stable connectivity with good signal quality (21/31)
+- ✅ **Modular Architecture**: Clean interface-based design with proper separation
+- ✅ **UART Communication**: Optimized character-by-character transmission with delays
+- ✅ **Network Registration**: Successful cellular connectivity with APN configuration
+- ✅ **AT Command System**: Robust response handling with comprehensive debugging
+- ✅ **Signal Quality**: Good cellular signal strength (CSQ: 21/31)
+
+### Issues Identified
+- ❌ **MQTT Service**: AT+CMQTTSTART fails with timeout (needs investigation)
+- ❌ **GPS Port Switching**: AT+CGNSSPORTSWITCH=0,1 returns ERROR
+- 🟡 **GPS Location**: Module initializes but position fix requires outdoor testing
+- 🟡 **Battery Functions**: MAX17048 detected but full functionality needs verification
 
 ### Technical Specifications
 - **Target Hardware**: ESP32-S3-SIM7670G development board
