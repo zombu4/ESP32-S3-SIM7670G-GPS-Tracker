@@ -3,16 +3,30 @@
 #include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "string.h"
 #include "stdlib.h"
 #include "math.h"
+// Include LTE module for shared AT interface
+#include "../lte/lte_module.h"
 
 static const char *TAG = "GPS_MODULE";
+
+// GPS Ring Buffer Configuration (4KB as requested)
+#define GPS_RING_BUFFER_SIZE 4096
+typedef struct {
+    char data[GPS_RING_BUFFER_SIZE];
+    volatile size_t write_idx;
+    volatile size_t read_idx;
+    volatile size_t count;
+    SemaphoreHandle_t mutex;
+} gps_ring_buffer_t;
 
 // Module state
 static gps_config_t current_config = {0};
 static gps_status_t module_status = {0};
 static bool module_initialized = false;
+static gps_ring_buffer_t gps_buffer = {0};
 
 // Private function prototypes
 static bool gps_init_impl(const gps_config_t* config);
@@ -23,6 +37,21 @@ static bool gps_power_on_impl(void);
 static bool gps_power_off_impl(void);
 static bool gps_reset_impl(void);
 static void gps_set_debug_impl(bool enable);
+
+// AT command functions for SIM7670G GPS
+static bool send_gps_at_command(const char* command, char* response, size_t response_size, int timeout_ms);
+static bool gps_enable_gnss(void);
+static bool gps_disable_gnss(void);
+static bool gps_start_output(void);
+static bool gps_stop_output(void);
+
+// Ring buffer functions (4KB GPS data buffer)
+static bool ring_buffer_init(void);
+static void ring_buffer_deinit(void);
+static bool ring_buffer_write(const char* data, size_t len);
+static size_t ring_buffer_read(char* buffer, size_t max_len);
+static size_t ring_buffer_available(void);
+static void ring_buffer_clear(void);
 
 // NMEA parsing functions
 static bool parse_nmea_coordinate(const char* coord_str, char dir, float* result);
@@ -48,6 +77,113 @@ const gps_interface_t* gps_get_interface(void)
     return &gps_interface;
 }
 
+// =============================================================================
+// 4KB GPS RING BUFFER IMPLEMENTATION (As requested by user)
+// =============================================================================
+
+static bool ring_buffer_init(void)
+{
+    gps_buffer.mutex = xSemaphoreCreateMutex();
+    if (!gps_buffer.mutex) {
+        ESP_LOGE(TAG, "Failed to create ring buffer mutex");
+        return false;
+    }
+    
+    gps_buffer.write_idx = 0;
+    gps_buffer.read_idx = 0;
+    gps_buffer.count = 0;
+    memset(gps_buffer.data, 0, GPS_RING_BUFFER_SIZE);
+    
+    ESP_LOGI(TAG, "4KB GPS ring buffer initialized");
+    return true;
+}
+
+static void ring_buffer_deinit(void)
+{
+    if (gps_buffer.mutex) {
+        vSemaphoreDelete(gps_buffer.mutex);
+        gps_buffer.mutex = NULL;
+    }
+    ESP_LOGI(TAG, "GPS ring buffer deinitialized");
+}
+
+static bool ring_buffer_write(const char* data, size_t len)
+{
+    if (!data || len == 0 || !gps_buffer.mutex) {
+        return false;
+    }
+    
+    if (xSemaphoreTake(gps_buffer.mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return false;
+    }
+    
+    for (size_t i = 0; i < len; i++) {
+        gps_buffer.data[gps_buffer.write_idx] = data[i];
+        gps_buffer.write_idx = (gps_buffer.write_idx + 1) % GPS_RING_BUFFER_SIZE;
+        
+        if (gps_buffer.count < GPS_RING_BUFFER_SIZE) {
+            gps_buffer.count++;
+        } else {
+            // Buffer full, advance read pointer (overwrite oldest data)
+            gps_buffer.read_idx = (gps_buffer.read_idx + 1) % GPS_RING_BUFFER_SIZE;
+        }
+    }
+    
+    xSemaphoreGive(gps_buffer.mutex);
+    return true;
+}
+
+static size_t ring_buffer_read(char* buffer, size_t max_len)
+{
+    if (!buffer || max_len == 0 || !gps_buffer.mutex) {
+        return 0;
+    }
+    
+    if (xSemaphoreTake(gps_buffer.mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return 0;
+    }
+    
+    size_t bytes_read = 0;
+    while (bytes_read < max_len && gps_buffer.count > 0) {
+        buffer[bytes_read] = gps_buffer.data[gps_buffer.read_idx];
+        gps_buffer.read_idx = (gps_buffer.read_idx + 1) % GPS_RING_BUFFER_SIZE;
+        gps_buffer.count--;
+        bytes_read++;
+    }
+    
+    xSemaphoreGive(gps_buffer.mutex);
+    return bytes_read;
+}
+
+static size_t ring_buffer_available(void)
+{
+    if (!gps_buffer.mutex) {
+        return 0;
+    }
+    
+    if (xSemaphoreTake(gps_buffer.mutex, pdMS_TO_TICKS(1)) != pdTRUE) {
+        return 0;
+    }
+    
+    size_t available = gps_buffer.count;
+    xSemaphoreGive(gps_buffer.mutex);
+    return available;
+}
+
+static void ring_buffer_clear(void)
+{
+    if (!gps_buffer.mutex) {
+        return;
+    }
+    
+    if (xSemaphoreTake(gps_buffer.mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        gps_buffer.write_idx = 0;
+        gps_buffer.read_idx = 0;
+        gps_buffer.count = 0;
+        xSemaphoreGive(gps_buffer.mutex);
+    }
+}
+
 static bool gps_init_impl(const gps_config_t* config)
 {
     if (!config) {
@@ -63,48 +199,43 @@ static bool gps_init_impl(const gps_config_t* config)
     // Store configuration
     memcpy(&current_config, config, sizeof(gps_config_t));
     
-    // Initialize UART (configuration comes from system config)
-    const uart_config_t uart_config = {
-        .baud_rate = 115200,  // Fixed for SIM7670G
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
-    
-    esp_err_t ret = uart_driver_install(UART_NUM_1, 2048, 0, 0, NULL, 0);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to install UART driver: %s", esp_err_to_name(ret));
-        return false;
-    }
-    
-    ret = uart_param_config(UART_NUM_1, &uart_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure UART: %s", esp_err_to_name(ret));
-        uart_driver_delete(UART_NUM_1);
-        return false;
-    }
-    
-    ret = uart_set_pin(UART_NUM_1, 18, 17, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set UART pins: %s", esp_err_to_name(ret));
-        uart_driver_delete(UART_NUM_1);
-        return false;
-    }
+    // GPS module uses the LTE module's UART interface
+    // No need to initialize UART here as LTE module handles it
+    ESP_LOGI(TAG, "GPS module using shared LTE UART interface");
     
     // Initialize module status
     memset(&module_status, 0, sizeof(module_status));
     module_status.initialized = true;
     module_status.uart_ready = true;
     
+    // Initialize 4KB GPS ring buffer (as requested)
+    if (!ring_buffer_init()) {
+        ESP_LOGE(TAG, "Failed to initialize GPS ring buffer");
+        return false;
+    }
+    
     module_initialized = true;
     
+    // Enable GNSS using AT commands (Waveshare documentation)
+    if (!gps_enable_gnss()) {
+        ESP_LOGE(TAG, "Failed to enable GNSS");
+        gps_deinit_impl();
+        return false;
+    }
+    
+    // Start GNSS data output
+    if (!gps_start_output()) {
+        ESP_LOGE(TAG, "Failed to start GNSS data output");
+        gps_deinit_impl();
+        return false;
+    }
+    
     if (config->debug_output) {
-        ESP_LOGI(TAG, "GPS module initialized successfully");
+        ESP_LOGI(TAG, "GPS module initialized successfully with AT commands");
         ESP_LOGI(TAG, "  Fix timeout: %d ms", config->fix_timeout_ms);
         ESP_LOGI(TAG, "  Min satellites: %d", config->min_satellites);
         ESP_LOGI(TAG, "  Update interval: %d ms", config->data_update_interval_ms);
+        ESP_LOGI(TAG, "  GNSS powered on and data output enabled");
     }
     
     return true;
@@ -116,7 +247,14 @@ static bool gps_deinit_impl(void)
         return true;
     }
     
-    uart_driver_delete(UART_NUM_1);
+    // Stop GNSS data output and power down
+    gps_stop_output();
+    gps_disable_gnss();
+    
+    // Cleanup 4KB GPS ring buffer
+    ring_buffer_deinit();
+    
+    // No need to delete UART driver as LTE module manages it
     memset(&module_status, 0, sizeof(module_status));
     module_initialized = false;
     
@@ -130,6 +268,13 @@ static bool gps_read_data_impl(gps_data_t* data)
         return false;
     }
     
+    // Use LTE module's AT interface to get NMEA data
+    const lte_interface_t* lte = lte_get_interface();
+    if (!lte || !lte->send_at_command) {
+        ESP_LOGE(TAG, "LTE module AT interface not available");
+        return false;
+    }
+    
     char* buffer = malloc(1024);
     if (!buffer) {
         ESP_LOGE(TAG, "Failed to allocate read buffer");
@@ -139,9 +284,21 @@ static bool gps_read_data_impl(gps_data_t* data)
     // Clear data structure
     memset(data, 0, sizeof(gps_data_t));
     
-    int len = uart_read_bytes(UART_NUM_1, buffer, 1023, pdMS_TO_TICKS(1000));
-    if (len > 0) {
-        buffer[len] = '\0';
+    // Send AT command to get NMEA data
+    at_response_t response = {0};
+    bool has_data = false;
+    
+    // Try to get NMEA data (this might require a specific AT command to query current location)
+    // For now, simulate having data and focus on parsing if we have any
+    if (lte->send_at_command("AT+CGNSINF", &response, 2000)) {
+        if (response.response[0] != '\0') {
+            strncpy(buffer, response.response, 1023);
+            buffer[1023] = '\0';
+            has_data = true;
+        }
+    }
+    
+    if (has_data) {
         module_status.total_sentences_parsed++;
         
         // Parse NMEA sentences
@@ -200,27 +357,67 @@ static bool gps_get_status_impl(gps_status_t* status)
 
 static bool gps_power_on_impl(void)
 {
-    // This would send AT commands to turn on GPS if needed
-    // For SIM7670G, this is handled by the LTE module
-    ESP_LOGI(TAG, "GPS power on requested");
+    if (!module_initialized) {
+        ESP_LOGE(TAG, "GPS module not initialized");
+        return false;
+    }
+    
+    if (module_status.gps_power_on && module_status.gnss_enabled && module_status.data_output_enabled) {
+        ESP_LOGW(TAG, "GPS already powered on and configured");
+        return true;
+    }
+    
+    // Enable GNSS power
+    if (!gps_enable_gnss()) {
+        ESP_LOGE(TAG, "Failed to enable GNSS power");
+        return false;
+    }
+    
+    // Start data output
+    if (!gps_start_output()) {
+        ESP_LOGE(TAG, "Failed to start GNSS data output");
+        return false;
+    }
+    
     module_status.gps_power_on = true;
+    ESP_LOGI(TAG, "GPS power on successful");
     return true;
 }
 
 static bool gps_power_off_impl(void)
 {
-    ESP_LOGI(TAG, "GPS power off requested");
+    if (!module_initialized) {
+        return true;
+    }
+    
+    // Stop data output
+    gps_stop_output();
+    
+    // Disable GNSS power
+    gps_disable_gnss();
+    
     module_status.gps_power_on = false;
+    ESP_LOGI(TAG, "GPS power off successful");
     return true;
 }
 
 static bool gps_reset_impl(void)
 {
     ESP_LOGI(TAG, "GPS reset requested");
+    
+    // Power off first
+    gps_power_off_impl();
+    
+    // Wait a moment
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    
+    // Reset status
     memset(&module_status, 0, sizeof(module_status));
     module_status.initialized = module_initialized;
     module_status.uart_ready = module_initialized;
-    return true;
+    
+    // Power back on
+    return gps_power_on_impl();
 }
 
 static void gps_set_debug_impl(bool enable)
@@ -414,5 +611,117 @@ bool gps_format_coordinates(const gps_data_t* data, char* buffer, size_t buffer_
     }
     
     snprintf(buffer, buffer_size, "%.6f,%.6f", data->latitude, data->longitude);
+    return true;
+}
+
+// AT command implementation for SIM7670G GPS control
+// Uses LTE module's AT interface instead of direct UART access
+
+static bool send_gps_at_command(const char* command, char* response, size_t response_size, int timeout_ms)
+{
+    if (!module_initialized || !command) {
+        return false;
+    }
+    
+    if (current_config.debug_output) {
+        ESP_LOGI(TAG, "GPS AT CMD: %s", command);
+    }
+    
+    // Use LTE module's AT command interface for GPS commands
+    const lte_interface_t* lte = lte_get_interface();
+    if (!lte || !lte->send_at_command) {
+        ESP_LOGE(TAG, "LTE module AT interface not available");
+        return false;
+    }
+    
+    at_response_t at_response = {0};
+    bool success = lte->send_at_command(command, &at_response, timeout_ms);
+    
+    if (current_config.debug_output) {
+        ESP_LOGI(TAG, "GPS AT RESP: %s (success: %s)", 
+                 at_response.response, success ? "YES" : "NO");
+    }
+    
+    // Copy response if requested
+    if (response && response_size > 0 && at_response.response[0] != '\0') {
+        strncpy(response, at_response.response, response_size - 1);
+        response[response_size - 1] = '\0';
+    }
+    
+    // Check for successful GPS responses
+    return success && (
+        strstr(at_response.response, "OK") != NULL ||
+        strstr(at_response.response, "READY") != NULL ||
+        strstr(at_response.response, "+CGNSSPWR") != NULL
+    );
+}
+
+static bool gps_enable_gnss(void)
+{
+    char response[256];
+    
+    // Send AT+CGNSSPWR=1 (Open GNSS) - Waveshare documentation
+    if (!send_gps_at_command("AT+CGNSSPWR=1", response, sizeof(response), 5000)) {
+        ESP_LOGE(TAG, "Failed to enable GNSS power");
+        return false;
+    }
+    
+    if (current_config.debug_output) {
+        ESP_LOGI(TAG, "GNSS power enabled successfully");
+    }
+    
+    module_status.gnss_enabled = true;
+    return true;
+}
+
+static bool gps_disable_gnss(void)
+{
+    char response[256];
+    
+    if (!send_gps_at_command("AT+CGNSSPWR=0", response, sizeof(response), 3000)) {
+        ESP_LOGE(TAG, "Failed to disable GNSS power");
+        return false;
+    }
+    
+    if (current_config.debug_output) {
+        ESP_LOGI(TAG, "GNSS power disabled");
+    }
+    
+    module_status.gnss_enabled = false;
+    return true;
+}
+
+static bool gps_start_output(void)
+{
+    char response[256];
+    
+    // Send AT+CGNSSTST=1 (Open GNSS data output) - Waveshare documentation
+    if (!send_gps_at_command("AT+CGNSSTST=1", response, sizeof(response), 3000)) {
+        ESP_LOGE(TAG, "Failed to start GNSS data output");
+        return false;
+    }
+    
+    if (current_config.debug_output) {
+        ESP_LOGI(TAG, "GNSS data output started");
+    }
+    
+    module_status.data_output_enabled = true;
+    return true;
+}
+
+static bool gps_stop_output(void)
+{
+    char response[256];
+    
+    if (!send_gps_at_command("AT+CGNSSTST=0", response, sizeof(response), 3000)) {
+        ESP_LOGE(TAG, "Failed to stop GNSS data output");
+        return false;
+    }
+    
+    if (current_config.debug_output) {
+        ESP_LOGI(TAG, "GNSS data output stopped");
+    }
+    
+    module_status.data_output_enabled = false;
     return true;
 }

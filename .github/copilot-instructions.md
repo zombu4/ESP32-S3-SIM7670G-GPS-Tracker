@@ -113,6 +113,28 @@ cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Docume
 - Use `.\bump_and_commit.ps1 [type] "message"` for quick version+commit
 - See VERSIONING_WORKFLOW.md for complete process
 
+**📚 ALWAYS REFERENCE - Waveshare ESP32-S3-SIM7670G-4G Official Documentation:**
+- **Overview**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Overview
+- **Cat-1 Module AT Commands**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Cat-1_Module_Command_Set
+- **HTTP Implementation**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#HTTP
+- **MQTT Implementation**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#MQTT
+- **GNSS/GPS Module**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#GNSS
+- **Demo Examples**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Demo_Explaination
+- **Camera Interface**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Camera
+- **TF-Card Support**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#TF-Card
+- **RGB LED Control**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#RGB
+- **Battery Management**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#BAT
+- **WiFi Functionality**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Portable_WIFI_Demo
+- **Cloud Applications**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Waveshare_Cloud_Application
+- **Resources & Downloads**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Resource
+
+**⚡ ESP-IDF WORKFLOW RULES (CRITICAL):**
+- **COM Port Management**: ALWAYS **KILL** serial monitor processes before building/flashing - don't just close!
+- **Kill Processes**: `taskkill /f /im python.exe` to force kill ESP monitor processes
+- **Environment Setup**: ALWAYS use: `cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Documents\esp-idf-tracker"`
+- **Development Sequence**: 1) **KILL** monitor processes 2) Build 3) Flash 4) Monitor
+- **Clean Builds**: Use `idf.py fullclean` when config changes don't apply
+
 ### Using VS Code ESP-IDF Extension
 
 1. Set target: ESP32-S3

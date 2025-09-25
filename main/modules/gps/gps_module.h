@@ -24,6 +24,8 @@ typedef struct {
     bool initialized;
     bool uart_ready;
     bool gps_power_on;
+    bool gnss_enabled;        // GNSS power status (AT+CGNSSPWR)
+    bool data_output_enabled; // GNSS data output status (AT+CGNSSTST)
     uint32_t last_fix_time;
     uint32_t total_sentences_parsed;
     uint32_t valid_sentences;

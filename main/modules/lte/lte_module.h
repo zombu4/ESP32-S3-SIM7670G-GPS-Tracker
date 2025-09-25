@@ -66,3 +66,23 @@ const lte_interface_t* lte_get_interface(void);
 const char* lte_status_to_string(lte_status_t status);
 bool lte_is_connected(void);
 bool lte_format_network_info(const lte_network_info_t* info, char* buffer, size_t buffer_size);
+
+// =============================================================================
+// MODULAR DEBUG CONTROL FUNCTIONS
+// =============================================================================
+
+// Individual debug control (can be toggled independently)
+void lte_set_debug_at_commands(bool enable);     // AT command logging
+void lte_set_debug_uart_data(bool enable);       // Raw UART data (very verbose)
+void lte_set_debug_network(bool enable);         // Network operations
+void lte_set_debug_connection(bool enable);      // Connection status changes
+void lte_set_debug_signal(bool enable);         // Signal strength updates
+
+// Bulk debug control
+void lte_enable_all_debug(void);                // Enable all debug modes
+void lte_disable_all_debug(void);              // Disable all debug modes (production)
+void lte_enable_interactive_debug(void);        // Enable maximum debug for interactive troubleshooting
+void lte_show_debug_status(void);              // Show current debug status
+
+// UART troubleshooting helpers
+void lte_log_uart_config(int tx_pin, int rx_pin); // Log current UART pin config with swap suggestions

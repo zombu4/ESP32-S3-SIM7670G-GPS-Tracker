@@ -15,7 +15,8 @@
 // =============================================================================
 
 // Your APN settings (contact your cellular provider)
-#define USER_CONFIG_APN              "your-apn-here"          // e.g., "hologram", "m2mglobal", "iot.1nce.net"
+// Note: APN is generally not sensitive information - it's just a network identifier
+#define USER_CONFIG_APN              "m2mglobal"              // Common values: "hologram", "m2mglobal", "iot.1nce.net"
 #define USER_CONFIG_APN_USERNAME     ""                       // Usually empty for most providers
 #define USER_CONFIG_APN_PASSWORD     ""                       // Usually empty for most providers
 

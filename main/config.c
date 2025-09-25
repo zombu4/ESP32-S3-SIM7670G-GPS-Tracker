@@ -12,6 +12,12 @@
     #endif
 #endif
 
+// Force user config for development
+#ifndef HAS_USER_CONFIG
+    #include "config_user.h"
+    #define HAS_USER_CONFIG
+#endif
+
 static const char *TAG = "CONFIG";
 static const char *NVS_NAMESPACE = "tracker_cfg";
 
@@ -19,8 +25,8 @@ static tracker_system_config_t default_config = {
     // Hardware Configuration
     .uart_hw = {
         .uart_num = 1,  // UART_NUM_1
-        .tx_pin = 18,
-        .rx_pin = 17,
+        .tx_pin = 17,
+        .rx_pin = 18,
         .baud_rate = 115200,
         .buffer_size = 1024
     },

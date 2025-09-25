@@ -139,7 +139,7 @@ static bool mqtt_connect_to_broker(void)
              current_config.broker_host, current_config.broker_port);
     
     // Connect to broker - Waveshare documentation format
-    char connect_cmd[512];
+    char connect_cmd[256];
     if (strlen(current_config.username) > 0) {
         snprintf(connect_cmd, sizeof(connect_cmd), 
                 "AT+CMQTTCONNECT=0,\"tcp://%s:%d\",%d,1,\"%s\",\"%s\"",
@@ -284,7 +284,7 @@ static bool mqtt_get_module_status_impl(mqtt_module_status_t* status)
 
 static bool mqtt_publish_impl(const mqtt_message_t* message, mqtt_publish_result_t* result)
 {
-    if (!message || strlen(message->topic) == 0 || strlen(message->payload) == 0) {
+    if (!message || !message->topic || !message->payload) {
         ESP_LOGE(TAG, "Invalid message parameters");
         return false;
     }
@@ -353,19 +353,12 @@ static bool mqtt_publish_impl(const mqtt_message_t* message, mqtt_publish_result
 
 static bool mqtt_publish_json_impl(const char* topic, const char* json_payload, mqtt_publish_result_t* result)
 {
-    if (!topic || !json_payload) {
-        ESP_LOGE(TAG, "Topic or payload is NULL");
-        return false;
-    }
-    
-    mqtt_message_t message = {0};
-    
-    // Copy topic and payload to message structure arrays
-    strncpy(message.topic, topic, sizeof(message.topic) - 1);
-    strncpy(message.payload, json_payload, sizeof(message.payload) - 1);
-    message.qos = current_config.qos_level;
-    message.retain = current_config.retain_messages;
-    message.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    mqtt_message_t message = {
+        .topic = topic,
+        .payload = json_payload,
+        .qos = current_config.qos_level,
+        .retain = current_config.retain_messages
+    };
     
     return mqtt_publish_impl(&message, result);
 }

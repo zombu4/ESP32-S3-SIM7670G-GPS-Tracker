@@ -8,7 +8,7 @@
 #define PROJECT_VERSION_STRING "1.0.0"
 
 // Build Information
-#define PROJECT_NAME "ESP32-S3-SIM7670G-GPS-Tracker"
+#define PROJECT_NAME "ESP32-S3-SIM7670G GPS Tracker"
 #define PROJECT_DESCRIPTION "Modular 4G GPS Tracker with MQTT"
 #define PROJECT_AUTHOR "ESP-IDF GPS Tracker Project"
 

@@ -8,6 +8,75 @@
 
 static const char *TAG = "LTE_MODULE";
 
+// =============================================================================
+// MODULAR DEBUG LOGGING SYSTEM
+// =============================================================================
+
+// Debug control flags - MAXIMUM CELLULAR DEBUG MODE
+static bool debug_at_commands = true;     // Log AT commands and responses
+static bool debug_uart_data = true;       // Log raw UART data (ENABLED for troubleshooting)
+static bool debug_network_ops = true;     // Log network operations
+static bool debug_connection = true;      // Log connection status changes
+static bool debug_signal_info = true;     // Log signal strength updates (ENABLED)
+static bool debug_raw_responses = true;   // Log complete raw AT responses
+static bool debug_timing = true;          // Log timing information for all operations
+static bool debug_registration = true;    // Log detailed network registration process
+
+// Debug logging macros - can be easily disabled by changing to empty macros
+#define LTE_DEBUG_AT(format, ...) do { \
+    if (debug_at_commands) { \
+        ESP_LOGI(TAG, "[AT] " format, ##__VA_ARGS__); \
+    } \
+} while(0)
+
+#define LTE_DEBUG_UART(format, ...) do { \
+    if (debug_uart_data) { \
+        ESP_LOGI(TAG, "[UART] " format, ##__VA_ARGS__); \
+    } \
+} while(0)
+
+#define LTE_DEBUG_NET(format, ...) do { \
+    if (debug_network_ops) { \
+        ESP_LOGI(TAG, "[NET] " format, ##__VA_ARGS__); \
+    } \
+} while(0)
+
+#define LTE_DEBUG_CONN(format, ...) do { \
+    if (debug_connection) { \
+        ESP_LOGI(TAG, "[CONN] " format, ##__VA_ARGS__); \
+    } \
+} while(0)
+
+#define LTE_DEBUG_SIGNAL(format, ...) do { \
+    if (debug_signal_info) { \
+        ESP_LOGI(TAG, "[SIGNAL] " format, ##__VA_ARGS__); \
+    } \
+} while(0)
+
+#define LTE_DEBUG_RAW(format, ...) do { \
+    if (debug_raw_responses) { \
+        ESP_LOGI(TAG, "[RAW] " format, ##__VA_ARGS__); \
+    } \
+} while(0)
+
+#define LTE_DEBUG_TIMING(format, ...) do { \
+    if (debug_timing) { \
+        ESP_LOGI(TAG, "[TIMING] " format, ##__VA_ARGS__); \
+    } \
+} while(0)
+
+#define LTE_DEBUG_REG(format, ...) do { \
+    if (debug_registration) { \
+        ESP_LOGI(TAG, "[REG] " format, ##__VA_ARGS__); \
+    } \
+} while(0)
+
+// Hardware debugging - UART pin configuration
+#define LTE_DEBUG_PINS(tx, rx) do { \
+    ESP_LOGI(TAG, "[PINS] UART TX=%d, RX=%d (ESP32 -> Modem TX=%d, ESP32 <- Modem RX=%d)", \
+             tx, rx, tx, rx); \
+} while(0)
+
 // Module state
 static lte_config_t current_config = {0};
 static lte_module_status_t module_status = {0};
@@ -68,11 +137,55 @@ static bool lte_init_impl(const lte_config_t* config)
     // Store configuration
     memcpy(&current_config, config, sizeof(lte_config_t));
     
+    // Update debug flags from config
+    debug_at_commands = config->debug_at_commands;
+    debug_network_ops = config->debug_output;
+    debug_connection = config->debug_output;
+    
+    LTE_DEBUG_NET("Initializing LTE module with APN: '%s'", config->apn);
+    LTE_DEBUG_NET("Network timeout: %d ms, Max retries: %d", 
+                  config->network_timeout_ms, config->max_retries);
+    
+    // Initialize UART for SIM7670G communication
+    // Following Waveshare ESP32-S3-SIM7670G documentation
+    uart_config_t uart_config = {
+        .baud_rate = 115200,           // Standard baud rate for SIM7670G
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_APB,
+    };
+    
+    // Configure UART parameters
+    esp_err_t ret = uart_param_config(UART_NUM_1, &uart_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure UART parameters: %s", esp_err_to_name(ret));
+        return false;
+    }
+    
+    // Set UART pins (TX=18, RX=17 for Waveshare ESP32-S3-SIM7670G) - PINS FLIPPED!
+    ret = uart_set_pin(UART_NUM_1, 18, 17, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set UART pins: %s", esp_err_to_name(ret));
+        return false;
+    }
+    
+    // Install UART driver with 4KB buffer (matching GPS buffer requirement)
+    ret = uart_driver_install(UART_NUM_1, 4096, 4096, 0, NULL, 0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to install UART driver: %s", esp_err_to_name(ret));
+        return false;
+    }
+    
+    LTE_DEBUG_PINS(18, 17); // Log successful UART initialization (TX=18, RX=17 - CORRECTED!)
+    ESP_LOGI(TAG, "UART driver initialized successfully for SIM7670G (TX=18, RX=17)");
+    
     // Initialize module status
     memset(&module_status, 0, sizeof(module_status));
     module_status.connection_status = LTE_STATUS_DISCONNECTED;
     
-    // Wait for module to be ready
+    // Wait for SIM7670G module to be ready (Waveshare recommends delay after UART init)
     vTaskDelay(pdMS_TO_TICKS(3000));
     
     // Test AT communication
@@ -124,11 +237,17 @@ static bool lte_deinit_impl(void)
     // Disconnect if connected
     lte_disconnect_impl();
     
+    // Clean up UART driver
+    esp_err_t ret = uart_driver_delete(UART_NUM_1);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to delete UART driver: %s", esp_err_to_name(ret));
+    }
+    
     // Reset module status
     memset(&module_status, 0, sizeof(module_status));
     module_initialized = false;
     
-    ESP_LOGI(TAG, "LTE module deinitialized");
+    ESP_LOGI(TAG, "LTE module deinitialized with UART cleanup");
     return true;
 }
 
@@ -144,29 +263,68 @@ static bool lte_connect_impl(void)
         return true;
     }
     
+    LTE_DEBUG_NET("=== STARTING CELLULAR NETWORK CONNECTION ===");
+    LTE_DEBUG_NET("APN: '%s'", current_config.apn);
+    LTE_DEBUG_NET("Network timeout: %d ms", current_config.network_timeout_ms);
     ESP_LOGI(TAG, "Connecting to cellular network...");
     module_status.connection_status = LTE_STATUS_CONNECTING;
     
     at_response_t response;
     
-    // Set APN
+    // Set APN with enhanced debug
+    LTE_DEBUG_NET("Step 1: Setting APN configuration...");
     if (!lte_set_apn_impl(current_config.apn, current_config.username, current_config.password)) {
+        LTE_DEBUG_NET("FAILED: APN configuration failed");
         module_status.connection_status = LTE_STATUS_ERROR;
         return false;
     }
+    LTE_DEBUG_NET("SUCCESS: APN configured");
     
-    // Check network registration
+    // Enhanced network registration with maximum debug
+    LTE_DEBUG_REG("Step 2: Starting network registration process...");
     uint32_t start_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    int registration_attempts = 0;
+    
     while ((xTaskGetTickCount() * portTICK_PERIOD_MS - start_time) < current_config.network_timeout_ms) {
+        registration_attempts++;
+        uint32_t elapsed = xTaskGetTickCount() * portTICK_PERIOD_MS - start_time;
+        
+        LTE_DEBUG_REG("Registration attempt #%d (elapsed: %d ms)", registration_attempts, elapsed);
+        
+        // Check multiple registration commands for maximum visibility
         if (lte_send_at_command_impl("AT+CREG?", &response, 2000)) {
-            if (strstr(response.response, "+CREG: 0,1") || strstr(response.response, "+CREG: 0,5")) {
-                ESP_LOGI(TAG, "Network registered successfully");
+            LTE_DEBUG_REG("CREG response: '%s'", response.response);
+            
+            if (strstr(response.response, "+CREG: 0,1")) {
+                LTE_DEBUG_REG("SUCCESS: Registered on home network");
                 break;
+            } else if (strstr(response.response, "+CREG: 0,5")) {
+                LTE_DEBUG_REG("SUCCESS: Registered roaming");  
+                break;
+            } else if (strstr(response.response, "+CREG: 0,2")) {
+                LTE_DEBUG_REG("STATUS: Searching for network...");
+            } else if (strstr(response.response, "+CREG: 0,0")) {
+                LTE_DEBUG_REG("STATUS: Not registered, not searching");
+            } else if (strstr(response.response, "+CREG: 0,3")) {
+                LTE_DEBUG_REG("ERROR: Registration denied");
+            } else {
+                LTE_DEBUG_REG("UNKNOWN: Unexpected CREG response");
             }
+        } else {
+            LTE_DEBUG_REG("ERROR: CREG command failed");
+        }
+        
+        // Also check signal strength during registration
+        if (lte_send_at_command_impl("AT+CSQ", &response, 2000)) {
+            LTE_DEBUG_SIGNAL("Signal during registration: %s", response.response);
         }
         
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+    
+    // Check final registration status
+    uint32_t final_elapsed = xTaskGetTickCount() * portTICK_PERIOD_MS - start_time;
+    LTE_DEBUG_REG("Registration process completed in %d ms (%d attempts)", final_elapsed, registration_attempts);
     
     // Activate PDP context
     if (!lte_send_at_command_impl("AT+CGACT=1,1", &response, 30000)) {
@@ -248,28 +406,101 @@ static bool lte_get_network_info_impl(lte_network_info_t* info)
 static bool lte_send_at_command_impl(const char* command, at_response_t* response, int timeout_ms)
 {
     if (!command || !response) {
+        LTE_DEBUG_AT("ERROR: Invalid parameters - command=%p, response=%p", command, response);
         return false;
     }
     
     uint32_t start_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    LTE_DEBUG_TIMING("Starting AT command: %s (timeout: %d ms)", command, timeout_ms);
     
     // Clear response
     memset(response, 0, sizeof(at_response_t));
     
-    // Send command
+    // Send command with maximum debug
     char cmd_buffer[256];
-    snprintf(cmd_buffer, sizeof(cmd_buffer), "%s\r\n", command);
-    uart_write_bytes(UART_NUM_1, cmd_buffer, strlen(cmd_buffer));
+    int cmd_len = snprintf(cmd_buffer, sizeof(cmd_buffer), "%s\r\n", command);
     
-    if (current_config.debug_at_commands) {
-        ESP_LOGI(TAG, "AT CMD: %s", command);
+    // MAXIMUM UART debugging - critical for troubleshooting
+    LTE_DEBUG_UART("=== UART TX START ===");
+    LTE_DEBUG_UART("Command: '%s' (len=%d)", command, strlen(command));
+    LTE_DEBUG_UART("Buffer: '%s' (len=%d)", cmd_buffer, cmd_len);
+    LTE_DEBUG_UART("Hex dump: ");
+    for (int i = 0; i < cmd_len; i++) {
+        printf("%02X ", (uint8_t)cmd_buffer[i]);
+    }
+    printf("\n");
+    
+    // Flush any pending data first
+    uart_flush(UART_NUM_1);
+    LTE_DEBUG_UART("UART flushed before send");
+    
+    // Send character-by-character with delays (following Waveshare Arduino example pattern)
+    // This is critical for SIM7670G reliable communication
+    LTE_DEBUG_UART("Sending command character-by-character with 10ms delays...");
+    int written = 0;
+    
+    // Send command characters with delays
+    for (int i = 0; i < strlen(command); i++) {
+        int bytes_sent = uart_write_bytes(UART_NUM_1, &command[i], 1);
+        if (bytes_sent == 1) {
+            written++;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10)); // 10ms delay between characters
     }
     
-    // Wait for response
+    // Send \r with delay
+    char cr = '\r';
+    uart_write_bytes(UART_NUM_1, &cr, 1);
+    written++;
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    // Send \n with delay  
+    char lf = '\n';
+    uart_write_bytes(UART_NUM_1, &lf, 1);
+    written++;
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    LTE_DEBUG_UART("UART sent %d characters with delays (total: %d)", written, strlen(command) + 2);
+    LTE_DEBUG_UART("=== UART TX END ===");
+    
+    LTE_DEBUG_AT(">>> SENDING: %s", command);
+    
+    // Wait for response with maximum debug
+    LTE_DEBUG_AT(">>> WAITING for response (timeout: %d ms)...", timeout_ms);
     response->success = wait_for_at_response("OK", response, timeout_ms);
     response->response_time_ms = (xTaskGetTickCount() * portTICK_PERIOD_MS) - start_time;
     
+    // MAXIMUM response debugging
+    LTE_DEBUG_RAW("=== RESPONSE ANALYSIS ===");
+    LTE_DEBUG_RAW("Success: %s", response->success ? "YES" : "NO");
+    LTE_DEBUG_RAW("Response time: %d ms", response->response_time_ms);
+    LTE_DEBUG_RAW("Response length: %d", strlen(response->response));
+    
+    if (strlen(response->response) > 0) {
+        LTE_DEBUG_RAW("Raw response: '%s'", response->response);
+        LTE_DEBUG_RAW("Response hex dump:");
+        for (int i = 0; i < strlen(response->response) && i < 50; i++) {
+            printf("%02X ", (uint8_t)response->response[i]);
+        }
+        printf("\n");
+    } else {
+        LTE_DEBUG_RAW("NO RESPONSE RECEIVED - Check UART pins!");
+    }
+    
+    if (response->success) {
+        LTE_DEBUG_AT("<<< SUCCESS: %s (%d ms)", command, response->response_time_ms);
+    } else {
+        LTE_DEBUG_AT("<<< FAILED: %s (%d ms)", command, response->response_time_ms);
+        if (strlen(response->response) > 0) {
+            LTE_DEBUG_AT("Error details: %s", response->response);
+        } else {
+            LTE_DEBUG_AT("CRITICAL: No response - Check UART TX/RX pins (17/18) or baud rate!");
+        }
+    }
+    
+    // Legacy debug for compatibility
     if (current_config.debug_at_commands) {
+        ESP_LOGI(TAG, "AT CMD: %s", command);
         ESP_LOGI(TAG, "AT RSP: %s (%d ms)", 
                  response->success ? "OK" : "ERROR", response->response_time_ms);
         if (!response->success && strlen(response->response) > 0) {
@@ -334,7 +565,114 @@ static void lte_set_debug_impl(bool enable)
 {
     current_config.debug_output = enable;
     current_config.debug_at_commands = enable;
+    
+    // Update our modular debug flags
+    debug_at_commands = enable;
+    debug_network_ops = enable; 
+    debug_connection = enable;
+    
     ESP_LOGI(TAG, "Debug output %s", enable ? "enabled" : "disabled");
+}
+
+// =============================================================================
+// MODULAR DEBUG CONTROL FUNCTIONS
+// =============================================================================
+
+void lte_set_debug_at_commands(bool enable) 
+{
+    debug_at_commands = enable;
+    LTE_DEBUG_AT("AT command debug %s", enable ? "enabled" : "disabled");
+}
+
+void lte_set_debug_uart_data(bool enable) 
+{
+    debug_uart_data = enable;
+    LTE_DEBUG_UART("UART data debug %s", enable ? "enabled" : "disabled");
+}
+
+void lte_set_debug_network(bool enable) 
+{
+    debug_network_ops = enable;
+    LTE_DEBUG_NET("Network debug %s", enable ? "enabled" : "disabled");
+}
+
+void lte_set_debug_connection(bool enable) 
+{
+    debug_connection = enable;
+    LTE_DEBUG_CONN("Connection debug %s", enable ? "enabled" : "disabled");
+}
+
+void lte_set_debug_signal(bool enable) 
+{
+    debug_signal_info = enable;
+    LTE_DEBUG_SIGNAL("Signal debug %s", enable ? "enabled" : "disabled");
+}
+
+// Enable all debug modes - MAXIMUM CELLULAR DEBUGGING 
+void lte_enable_all_debug(void) 
+{
+    debug_at_commands = true;
+    debug_uart_data = true; 
+    debug_network_ops = true;
+    debug_connection = true;
+    debug_signal_info = true;
+    debug_raw_responses = true;
+    debug_timing = true;
+    debug_registration = true;
+    ESP_LOGI(TAG, "🔍 MAXIMUM CELLULAR DEBUG MODE ACTIVATED 🔍");
+    ESP_LOGI(TAG, "All debug categories enabled for troubleshooting");
+}
+
+// Enable maximum debug for interactive troubleshooting
+void lte_enable_interactive_debug(void) 
+{
+    lte_enable_all_debug();
+    ESP_LOGI(TAG, "=== INTERACTIVE DEBUG SESSION STARTED ===");
+    ESP_LOGI(TAG, "📡 Ready for cellular troubleshooting");
+    ESP_LOGI(TAG, "📋 Monitor serial output for detailed logs");
+    ESP_LOGI(TAG, "⚠️  If stuck, check UART pins or try pin swap");
+}
+
+// Show current debug status 
+void lte_show_debug_status(void) 
+{
+    ESP_LOGI(TAG, "=== CELLULAR DEBUG STATUS ===");
+    ESP_LOGI(TAG, "AT Commands: %s", debug_at_commands ? "ENABLED" : "disabled");
+    ESP_LOGI(TAG, "UART Data: %s", debug_uart_data ? "ENABLED" : "disabled");
+    ESP_LOGI(TAG, "Network Ops: %s", debug_network_ops ? "ENABLED" : "disabled");
+    ESP_LOGI(TAG, "Connection: %s", debug_connection ? "ENABLED" : "disabled");
+    ESP_LOGI(TAG, "Signal Info: %s", debug_signal_info ? "ENABLED" : "disabled");
+    ESP_LOGI(TAG, "Raw Responses: %s", debug_raw_responses ? "ENABLED" : "disabled");
+    ESP_LOGI(TAG, "Timing: %s", debug_timing ? "ENABLED" : "disabled");
+    ESP_LOGI(TAG, "Registration: %s", debug_registration ? "ENABLED" : "disabled");
+    ESP_LOGI(TAG, "===============================");
+}
+
+// Disable all debug modes - for production
+void lte_disable_all_debug(void) 
+{
+    debug_at_commands = false;
+    debug_uart_data = false;
+    debug_network_ops = false; 
+    debug_connection = false;
+    debug_signal_info = false;
+    ESP_LOGI(TAG, "All debug modes disabled");
+}
+
+// =============================================================================
+// UART PIN CONFIGURATION HELPERS  
+// =============================================================================
+
+void lte_log_uart_config(int tx_pin, int rx_pin) 
+{
+    ESP_LOGI(TAG, "=== UART CONFIGURATION ===");
+    ESP_LOGI(TAG, "ESP32-S3 TX Pin: %d -> SIM7670G RX", tx_pin);
+    ESP_LOGI(TAG, "ESP32-S3 RX Pin: %d <- SIM7670G TX", rx_pin); 
+    ESP_LOGI(TAG, "Baud Rate: 115200");
+    ESP_LOGI(TAG, "==========================");
+    ESP_LOGI(TAG, "If AT commands fail, try swapping TX/RX pins:");
+    ESP_LOGI(TAG, "  Current: TX=%d, RX=%d", tx_pin, rx_pin);
+    ESP_LOGI(TAG, "  Try: TX=%d, RX=%d", rx_pin, tx_pin);
 }
 
 // Helper function implementations
