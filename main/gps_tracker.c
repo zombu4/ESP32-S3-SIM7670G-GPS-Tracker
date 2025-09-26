@@ -20,6 +20,11 @@
 #include "modules/modem_init/modem_init.h"
 #include "baud_rate_tester.h"
 
+// External function declaration for MQTT JSON payload creation
+extern bool mqtt_create_json_payload(const char* latitude, const char* longitude, 
+                                     float battery_voltage, int battery_percentage,
+                                     char* json_buffer, size_t buffer_size);
+
 static const char *TAG = "GPS_TRACKER";
 
 // Module interfaces
@@ -37,10 +42,8 @@ static battery_data_t last_battery_data = {0};
 
 // Function prototypes
 static void transmission_timer_callback(TimerHandle_t xTimer);
-static void data_collection_task(void *pvParameters);
 void data_aggregation_task(void* params);
 static bool initialize_modules(void);
-static char* create_json_payload(const gps_data_t* gps, const battery_data_t* battery);
 
 void app_main(void)
 {
@@ -72,14 +75,23 @@ void app_main(void)
     ESP_LOGI(TAG, "� Hardware: TX=17, RX=18, Baud=115200 (ESP32-S3-SIM7670G standard)");
     ESP_LOGI(TAG, "=========================================================");
     
-    // Initialize all modules
+    // CRITICAL: Initialize task manager FIRST to create UART mutex
+    ESP_LOGI(TAG, "🔧 Initializing task manager and UART mutex...");
+    const task_manager_t* task_mgr = task_manager_get_interface();
+    if (!task_mgr || !task_mgr->init()) {
+        ESP_LOGE(TAG, "Failed to initialize task manager - UART mutex unavailable");
+        return;
+    }
+    ESP_LOGI(TAG, "✅ Task manager and UART mutex initialized");
+    
+    // Initialize all modules (now UART mutex is available)
     if (!initialize_modules()) {
         ESP_LOGE(TAG, "Failed to initialize modules");
         return;
     }
     
-    // Create data collection task
-    xTaskCreate(data_collection_task, "data_collection", 4096, NULL, 5, NULL);
+    // Data collection is now handled by the task manager system
+    // Old standalone data collection task removed to prevent conflicts
     
     // Create transmission timer
     transmission_timer = xTimerCreate("TransmissionTimer", 
@@ -98,9 +110,8 @@ void app_main(void)
     
     // Task watchdog is initialized by task manager - no need to initialize here
     
-    // Get task manager interface and start dual-core tasks
-    const task_manager_t* task_mgr = task_manager_get_interface();
-    if (task_mgr && task_mgr->init() && task_mgr->start_all_tasks()) {
+    // Start dual-core tasks (task manager already initialized above)
+    if (task_mgr->start_all_tasks()) {
         ESP_LOGI(TAG, "✅ Dual-core task system started!");
         
         // Start data aggregation task on Core 0 (with MQTT)
@@ -227,90 +238,65 @@ static bool initialize_modules(void)
     return true;
 }
 
-static void data_collection_task(void *pvParameters)
-{
-    ESP_LOGI(TAG, "Data collection task started");
-    
-    while (1) {
-        // Read GPS data
-        if (gps_if && !gps_if->read_data(&last_gps_data)) {
-            ESP_LOGW(TAG, "Failed to read GPS data");
-            memset(&last_gps_data, 0, sizeof(gps_data_t));
-        }
-        
-        // Read battery data
-        if (battery_if && !battery_if->read_data(&last_battery_data)) {
-            ESP_LOGW(TAG, "Failed to read battery data");
-            memset(&last_battery_data, 0, sizeof(battery_data_t));
-        }
-        
-        vTaskDelay(pdMS_TO_TICKS(15000)); // Collect data every 15 seconds (slower GPS polling)
-    }
-}
+// Old data_collection_task removed - now using task manager system for data collection
 
 static void transmission_timer_callback(TimerHandle_t xTimer)
 {
-    ESP_LOGI(TAG, "Transmission timer triggered");
+    ESP_LOGI(TAG, "📡 MQTT transmission timer triggered");
     
     if (!mqtt_if) {
-        ESP_LOGE(TAG, "MQTT interface not available");
+        ESP_LOGE(TAG, "❌ MQTT interface not available");
         return;
     }
     
-    // Create JSON payload
-    char* payload = create_json_payload(&last_gps_data, &last_battery_data);
-    if (!payload) {
-        ESP_LOGE(TAG, "Failed to create JSON payload");
+    // Check MQTT connection status
+    mqtt_status_t status = mqtt_if->get_status();
+    ESP_LOGI(TAG, "📡 MQTT Status: %s", 
+             status == MQTT_STATUS_CONNECTED ? "CONNECTED" :
+             status == MQTT_STATUS_CONNECTING ? "CONNECTING" :
+             status == MQTT_STATUS_DISCONNECTED ? "DISCONNECTED" : "ERROR");
+    
+    if (status != MQTT_STATUS_CONNECTED) {
+        ESP_LOGW(TAG, "⚠️  MQTT not connected, attempting reconnection...");
+        if (!mqtt_if->connect()) {
+            ESP_LOGE(TAG, "❌ MQTT reconnection failed");
+            return;
+        }
+        ESP_LOGI(TAG, "✅ MQTT reconnection successful");
+    }
+    
+    // Create JSON payload using GPS coordinate strings for better precision
+    char lat_str[16], lon_str[16];
+    snprintf(lat_str, sizeof(lat_str), "%.6f", last_gps_data.latitude);
+    snprintf(lon_str, sizeof(lon_str), "%.6f", last_gps_data.longitude);
+    
+    // Use the enhanced MQTT module JSON function
+    char json_buffer[1024];
+    if (!mqtt_create_json_payload(lat_str, lon_str, 
+                                  last_battery_data.voltage, 
+                                  (int)last_battery_data.percentage,
+                                  json_buffer, sizeof(json_buffer))) {
+        ESP_LOGE(TAG, "❌ Failed to create JSON payload");
         return;
     }
+    
+    ESP_LOGI(TAG, "📦 Publishing to topic: %s", system_config.mqtt.topic);
+    ESP_LOGI(TAG, "📋 Payload: %s", json_buffer);
     
     // Publish data
     mqtt_publish_result_t result = {0};
-    if (mqtt_if->publish_json(system_config.mqtt.topic, payload, &result)) {
-        ESP_LOGI(TAG, "Data transmitted successfully");
+    if (mqtt_if->publish_json(system_config.mqtt.topic, json_buffer, &result)) {
+        ESP_LOGI(TAG, "🎉 Data transmitted successfully to %s:%d", 
+                 system_config.mqtt.broker_host, system_config.mqtt.broker_port);
+        ESP_LOGI(TAG, "📊 GPS: %s,%s | Battery: %.1fV (%d%%) | Satellites: %d", 
+                 lat_str, lon_str, last_battery_data.voltage, 
+                 (int)last_battery_data.percentage, last_gps_data.satellites);
     } else {
-        ESP_LOGW(TAG, "Failed to transmit data");
+        ESP_LOGW(TAG, "❌ Failed to transmit data via MQTT");
     }
-    
-    free(payload);
 }
 
-static char* create_json_payload(const gps_data_t* gps, const battery_data_t* battery)
-{
-    cJSON* root = cJSON_CreateObject();
-    if (!root) {
-        return NULL;
-    }
-    
-    // Add timestamp
-    cJSON* timestamp = cJSON_CreateString(gps->timestamp[0] ? gps->timestamp : "unknown");
-    cJSON_AddItemToObject(root, "timestamp", timestamp);
-    
-    // Add GPS data
-    cJSON* gps_obj = cJSON_CreateObject();
-    cJSON_AddNumberToObject(gps_obj, "latitude", gps->latitude);
-    cJSON_AddNumberToObject(gps_obj, "longitude", gps->longitude);
-    cJSON_AddNumberToObject(gps_obj, "altitude", gps->altitude);
-    cJSON_AddNumberToObject(gps_obj, "speed_kmh", gps->speed_kmh);
-    cJSON_AddNumberToObject(gps_obj, "course", gps->course);
-    cJSON_AddNumberToObject(gps_obj, "satellites", gps->satellites);
-    cJSON_AddBoolToObject(gps_obj, "fix_valid", gps->fix_valid);
-    cJSON_AddItemToObject(root, "gps", gps_obj);
-    
-    // Add battery data
-    cJSON* battery_obj = cJSON_CreateObject();
-    cJSON_AddNumberToObject(battery_obj, "percentage", battery->percentage);
-    cJSON_AddNumberToObject(battery_obj, "voltage", battery->voltage);
-    cJSON_AddBoolToObject(battery_obj, "charging", battery->charging);
-    cJSON_AddBoolToObject(battery_obj, "present", battery->present);
-    cJSON_AddItemToObject(root, "battery", battery_obj);
-    
-    // Convert to string
-    char* json_string = cJSON_Print(root);
-    cJSON_Delete(root);
-    
-    return json_string;
-}
+// Note: Using mqtt_create_json_payload() instead of local implementation
 
 /**
  * @brief Data aggregation task - collects data from queues and publishes via MQTT
@@ -320,6 +306,12 @@ void data_aggregation_task(void* params)
 {
     const task_manager_t* task_mgr = (const task_manager_t*)params;
     ESP_LOGI(TAG, "📊 [Core 0] Data Aggregation Task started");
+    
+    // Register this task with the watchdog
+    esp_err_t err = esp_task_wdt_add(NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to add data aggregation task to watchdog: %s", esp_err_to_name(err));
+    }
     
     gps_data_t gps_data = {0};
     battery_data_t battery_data = {0};
@@ -396,5 +388,8 @@ void data_aggregation_task(void* params)
     }
     
     ESP_LOGI(TAG, "🛑 [Core 0] Data Aggregation Task stopped");
+    
+    // Unregister from watchdog before deletion
+    esp_task_wdt_delete(NULL);
     vTaskDelete(NULL);
 }

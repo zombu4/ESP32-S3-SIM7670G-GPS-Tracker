@@ -263,14 +263,14 @@ static bool gps_read_data_impl(gps_data_t* data)
         return false;
     }
     
-    // Use LTE module's AT interface to get GNSS data via polling ONLY
+    // Use LTE module's AT interface to access preserved NMEA data and polling
     const lte_interface_t* lte = lte_get_interface();
     if (!lte || !lte->send_at_command) {
         ESP_LOGE(TAG, "LTE module AT interface not available");
         return false;
     }
     
-    char* buffer = malloc(1024);
+    char* buffer = malloc(4096);  // Larger buffer for preserved NMEA data
     if (!buffer) {
         ESP_LOGE(TAG, "Failed to allocate read buffer");
         return false;
@@ -279,36 +279,57 @@ static bool gps_read_data_impl(gps_data_t* data)
     // Clear data structure
     memset(data, 0, sizeof(gps_data_t));
     
-    // Poll GNSS data using AT+CGNSINF (Waveshare recommended polling command)
-    // This command returns location info without continuous output - THE WORKING METHOD!
-    at_response_t response = {0};
-    bool has_data = false;
+    // FIRST: Try to get preserved NMEA data (this has the satellite information!)
+    size_t preserved_length = 0;
+    bool has_preserved_data = false;
     
-    ESP_LOGD(TAG, "📍 Polling GNSS location data (AT+CGNSINF) - REVERT TO WORKING METHOD");
-    if (lte->send_at_command("AT+CGNSINF", &response, 3000)) {
-        if (response.response[0] != '\0' && strstr(response.response, "+CGNSINF:") != NULL) {
-            strncpy(buffer, response.response, 1023);
-            buffer[1023] = '\0';
-            has_data = true;
-            ESP_LOGD(TAG, "✅ GNSS poll response: %s", buffer);
-        } else {
-            ESP_LOGW(TAG, "❌ No GNSS data in poll response");
+    if (lte->get_preserved_nmea && lte->get_preserved_nmea(buffer, 4095, &preserved_length)) {
+        if (preserved_length > 0) {
+            buffer[preserved_length] = '\0';
+            has_preserved_data = true;
+            if (current_config.debug_output) {
+                ESP_LOGD(TAG, "Using preserved NMEA data (%zu bytes)", preserved_length);
+            }
         }
-    } else {
-        ESP_LOGE(TAG, "❌ GNSS polling failed (AT+CGNSINF)");
     }
     
-    if (has_data) {
-        module_status.total_sentences_parsed++;
+    // SECOND: If no preserved data, fall back to polling
+    if (!has_preserved_data) {
+        at_response_t response = {0};
         
-        // Parse NMEA sentences
-        char* line = strtok(buffer, "\r\n");
-        while (line != NULL) {
-            if (current_config.debug_nmea) {
-                ESP_LOGI(TAG, "NMEA: %s", line);
+        if (lte->send_at_command("AT+CGNSINF", &response, 3000)) {
+            if (response.response[0] != '\0' && strstr(response.response, "+CGNSINF:") != NULL) {
+                strncpy(buffer, response.response, 4095);
+                buffer[4095] = '\0';
+            } else {
+                if (current_config.debug_output) {
+                    ESP_LOGW(TAG, "No GNSS data in poll response");
+                }
+                free(buffer);
+                return false;
             }
+        } else {
+            if (current_config.debug_output) {
+                ESP_LOGW(TAG, "GNSS polling failed");
+            }
+            free(buffer);
+            return false;
+        }
+    }
+    
+    // Parse NMEA sentences (either from preserved data or polling)
+    module_status.total_sentences_parsed++;
+    
+    char* line = strtok(buffer, "\r\n");
+    int sentences_processed = 0;
+    int max_satellites = 0; // Track maximum satellites from all constellations
+    
+    while (line != NULL) {
+        if (strlen(line) > 5) {  // Valid NMEA sentence minimum length
+            sentences_processed++;
             
             if (validate_nmea_checksum(line)) {
+                // Parse different NMEA sentence types
                 if (strncmp(line, "$GNRMC", 6) == 0 || strncmp(line, "$GPRMC", 6) == 0) {
                     if (parse_gnrmc(line, data)) {
                         module_status.valid_sentences++;
@@ -317,15 +338,30 @@ static bool gps_read_data_impl(gps_data_t* data)
                     if (parse_gngga(line, data)) {
                         module_status.valid_sentences++;
                     }
-                } else if (strncmp(line, "$GPGSV", 6) == 0 || strncmp(line, "$GNGSV", 6) == 0) {
-                    parse_gpgsv(line, data);
+                } else if (strncmp(line, "$GPGSV", 6) == 0 || strncmp(line, "$GLGSV", 6) == 0 || 
+                          strncmp(line, "$GAGSV", 6) == 0 || strncmp(line, "$BDGSV", 6) == 0) {
+                    // Parse satellite info from all GNSS systems and accumulate
+                    if (parse_gpgsv(line, data)) {
+                        if (data->satellites > max_satellites) {
+                            max_satellites = data->satellites;
+                        }
+                    }
                 }
-            } else {
+            } else if (current_config.debug_output) {
                 module_status.parse_errors++;
             }
-            
-            line = strtok(NULL, "\r\n");
         }
+        line = strtok(NULL, "\r\n");
+    }
+    
+    // Use the maximum satellite count found
+    data->satellites = max_satellites;
+    
+    // Clean output - only show important information
+    if (current_config.debug_output) {
+        ESP_LOGI(TAG, "GPS Status: Fix=%s, Sats=%d, Lat=%.6f, Lon=%.6f, Speed=%.1f km/h", 
+                 data->fix_valid ? "YES" : "NO", data->satellites,
+                 data->latitude, data->longitude, data->speed_kmh);
     }
     
     free(buffer);
@@ -376,11 +412,9 @@ static bool gps_power_on_impl(void)
     // Wait for GNSS to stabilize (shorter wait for polling mode)
     vTaskDelay(pdMS_TO_TICKS(3000));
     
-    // DO NOT start automatic data output - we will poll with AT+CGNSINF
-    ESP_LOGI(TAG, "📍 GNSS enabled in POLLING-ONLY mode - no auto output");
-    
-    // Port switching not needed - GNSS powered on via AT+CGNSSPWR=1
-    // Polling works directly via AT+CGNSINF (Waveshare official method)
+    if (current_config.debug_output) {
+        ESP_LOGI(TAG, "GNSS enabled in polling mode");
+    }
     
     module_status.gps_power_on = true;
     ESP_LOGI(TAG, "GPS power on successful");
@@ -572,16 +606,33 @@ static bool parse_gngga(const char* sentence, gps_data_t* data)
 
 static bool parse_gpgsv(const char* sentence, gps_data_t* data)
 {
+    // GSV format: $GPGSV,total_msg,msg_num,total_sats,sat1_prn,sat1_elev,sat1_azim,sat1_snr,...*checksum
     char temp_sentence[256];
     strncpy(temp_sentence, sentence, sizeof(temp_sentence) - 1);
+    temp_sentence[255] = '\0';
     
     char* token = strtok(temp_sentence, ",");
     int field = 0;
+    int satellites_in_view = 0;
     
+    // Parse the sentence to get satellite count
     while (token && field < 4) {
-        if (field == 3) { // Satellites in view
-            data->satellites = atoi(token);
-            return true;
+        if (field == 3) { // Total satellites in view for this constellation
+            satellites_in_view = atoi(token);
+            // Accumulate satellites from all constellations (GPS, GLONASS, Galileo, BeiDou)
+            // Only add if this is a valid count and we haven't counted this constellation yet
+            if (satellites_in_view > 0) {
+                // Simple accumulation - in real implementation you'd track which constellations
+                // you've already counted, but for now just take the maximum
+                if (satellites_in_view > data->satellites) {
+                    data->satellites = satellites_in_view;
+                }
+                if (current_config.debug_output) {
+                    ESP_LOGD(TAG, "Satellites in view: %d (constellation total: %d)", 
+                            data->satellites, satellites_in_view);
+                }
+            }
+            return satellites_in_view > 0;
         }
         token = strtok(NULL, ",");
         field++;

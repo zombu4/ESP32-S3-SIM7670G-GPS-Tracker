@@ -6,6 +6,7 @@
 #include "esp_task_wdt.h"
 #include "string.h"
 #include "stdlib.h"
+#include "../../task_manager.h"
 
 static const char *TAG = "LTE_MODULE";
 
@@ -35,6 +36,8 @@ static bool debug_registration = true;    // Log detailed network registration p
         ESP_LOGI(TAG, "[UART] " format, ##__VA_ARGS__); \
     } \
 } while(0)
+
+// Unused function removed - continuous_uart_monitor was not being used
 
 #define LTE_DEBUG_NET(format, ...) do { \
     if (debug_network_ops) { \
@@ -83,6 +86,10 @@ static lte_config_t current_config = {0};
 static lte_module_status_t module_status = {0};
 static bool module_initialized = false;
 
+// NMEA preservation buffer (shared across AT commands)
+static char preserved_nmea_buffer[2048] = {0};
+static size_t preserved_nmea_length = 0;
+
 // Private function prototypes
 static bool lte_init_impl(const lte_config_t* config);
 static bool lte_deinit_impl(void);
@@ -93,6 +100,7 @@ static bool lte_get_status_impl(lte_module_status_t* status);
 static bool lte_get_network_info_impl(lte_network_info_t* info);
 static bool lte_send_at_command_impl(const char* command, at_response_t* response, int timeout_ms);
 static bool lte_read_raw_data_impl(char* buffer, size_t buffer_size, size_t* bytes_read, int timeout_ms);
+static bool lte_get_preserved_nmea_impl(char* buffer, size_t buffer_size, size_t* data_length);
 static bool lte_set_apn_impl(const char* apn, const char* username, const char* password);
 static bool lte_check_sim_ready_impl(void);
 static bool lte_get_signal_strength_impl(int* rssi, int* quality);
@@ -114,6 +122,7 @@ static const lte_interface_t lte_interface = {
     .get_network_info = lte_get_network_info_impl,
     .send_at_command = lte_send_at_command_impl,
     .read_raw_data = lte_read_raw_data_impl,
+    .get_preserved_nmea = lte_get_preserved_nmea_impl,
     .set_apn = lte_set_apn_impl,
     .check_sim_ready = lte_check_sim_ready_impl,
     .get_signal_strength = lte_get_signal_strength_impl,
@@ -190,7 +199,6 @@ static bool lte_init_impl(const lte_config_t* config)
     
     // Wait for SIM7670G module to be ready (Waveshare recommends delay after UART init)
     vTaskDelay(pdMS_TO_TICKS(3000));
-    esp_task_wdt_reset();  // Reset watchdog after delay
     
     // ===================================================================
     // CRITICAL: GPS Port Switching FIRST (before any AT commands!)
@@ -202,7 +210,6 @@ static bool lte_init_impl(const lte_config_t* config)
     uart_flush_input(UART_NUM_1);
     uart_write_bytes(UART_NUM_1, "AT+CGNSSPWR=0\r\n", 15);
     vTaskDelay(pdMS_TO_TICKS(2000));
-    esp_task_wdt_reset();  // Reset watchdog
     uart_flush_input(UART_NUM_1);
     
     uart_write_bytes(UART_NUM_1, "AT+CGNSSTST=0\r\n", 15);  
@@ -210,14 +217,12 @@ static bool lte_init_impl(const lte_config_t* config)
     uart_flush_input(UART_NUM_1);
     
     // Removed AT+CGNSSPORTSWITCH - not documented in Waveshare official reference
-    esp_task_wdt_reset();  // Reset watchdog
     
     ESP_LOGI(TAG, "✅ GPS interference disabled - AT commands should work now");
     
     // Test AT communication
     at_response_t response;
     for (int i = 0; i < current_config.max_retries; i++) {
-        esp_task_wdt_reset();  // Reset watchdog in retry loop
         if (lte_send_at_command_impl("AT", &response, 2000)) {
             break;
         }
@@ -229,12 +234,10 @@ static bool lte_init_impl(const lte_config_t* config)
     }
     
     // Set full functionality (reduced timeout to prevent watchdog)
-    esp_task_wdt_reset();  // Reset before long command
     if (!lte_send_at_command_impl("AT+CFUN=1", &response, 5000)) {
         ESP_LOGE(TAG, "Failed to set full functionality");
         return false;
     }
-    esp_task_wdt_reset();  // Reset after long command
     
     vTaskDelay(pdMS_TO_TICKS(2000));
     
@@ -355,10 +358,10 @@ static bool lte_connect_impl(void)
     uint32_t final_elapsed = xTaskGetTickCount() * portTICK_PERIOD_MS - start_time;
     LTE_DEBUG_REG("Registration process completed in %d ms (%d attempts)", final_elapsed, registration_attempts);
     
-    // Activate PDP context
-    if (!lte_send_at_command_impl("AT+CGACT=1,1", &response, 30000)) {
+    // Activate PDP context (reduced timeout to prevent watchdog)
+    if (!lte_send_at_command_impl("AT+CGACT=1,1", &response, 8000)) {
         ESP_LOGW(TAG, "Failed to activate PDP context, trying alternative");
-        if (!lte_send_at_command_impl("AT+CGATT=1", &response, 10000)) {
+        if (!lte_send_at_command_impl("AT+CGATT=1", &response, 8000)) {
             ESP_LOGE(TAG, "Failed to attach to network");
             module_status.connection_status = LTE_STATUS_ERROR;
             return false;
@@ -438,14 +441,20 @@ static bool lte_send_at_command_impl(const char* command, at_response_t* respons
         LTE_DEBUG_AT("ERROR: Invalid parameters - command=%p, response=%p", command, response);
         return false;
     }
-    
+
+    // CRITICAL: Take UART mutex to prevent interference with GNSS data
+    const task_manager_t* task_mgr = task_manager_get_interface();
+    if (!task_mgr || !task_mgr->shared_uart_mutex || 
+        xSemaphoreTake(task_mgr->shared_uart_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        LTE_DEBUG_AT("ERROR: Failed to acquire UART mutex for AT command: %s", command);
+        return false;
+    }
+
     uint32_t start_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
     LTE_DEBUG_TIMING("Starting AT command: %s (timeout: %d ms)", command, timeout_ms);
     
     // Clear response
-    memset(response, 0, sizeof(at_response_t));
-    
-    // Send command with maximum debug
+    memset(response, 0, sizeof(at_response_t));    // Send command with maximum debug
     char cmd_buffer[256];
     int cmd_len = snprintf(cmd_buffer, sizeof(cmd_buffer), "%s\r\n", command);
     
@@ -459,9 +468,66 @@ static bool lte_send_at_command_impl(const char* command, at_response_t* respons
     }
     printf("\n");
     
-    // Flush any pending data first
+    // CRITICAL DEBUG: LOG ALL UART DATA BEFORE FLUSHING
+    size_t buffered_data = 0;
+    uart_get_buffered_data_len(UART_NUM_1, &buffered_data);
+    
+    LTE_DEBUG_UART("📊 UART Status: %d bytes buffered before AT command", buffered_data);
+    
+    if (buffered_data > 0) {
+        // READ AND LOG EVERYTHING - NO FILTERING
+        char debug_buffer[2048];  // Large buffer
+        int read_len = uart_read_bytes(UART_NUM_1, debug_buffer, sizeof(debug_buffer) - 1, pdMS_TO_TICKS(200));
+        
+        if (read_len > 0) {
+            debug_buffer[read_len] = '\0';
+            
+            // LOG EVERYTHING - RAW DATA
+            LTE_DEBUG_UART("🔍 === ALL UART DATA BEFORE FLUSH (%d bytes) ===", read_len);
+            LTE_DEBUG_UART("📄 RAW ASCII: %.*s", read_len, debug_buffer);
+            
+            // LOG EVERYTHING - HEX DUMP  
+            LTE_DEBUG_UART("🔍 === HEX DUMP OF ALL UART DATA ===");
+            for (int i = 0; i < read_len; i += 16) {
+                char hex_line[64] = {0};
+                char ascii_line[17] = {0};
+                
+                for (int j = 0; j < 16 && (i + j) < read_len; j++) {
+                    sprintf(hex_line + (j * 3), "%02X ", (unsigned char)debug_buffer[i + j]);
+                    ascii_line[j] = (debug_buffer[i + j] >= 32 && debug_buffer[i + j] <= 126) ? debug_buffer[i + j] : '.';
+                }
+                
+                LTE_DEBUG_UART("   %04X: %-48s |%s|", i, hex_line, ascii_line);
+            }
+            
+            // ANALYZE PATTERNS AND PRESERVE NMEA DATA
+            if (strstr(debug_buffer, "$G")) {
+                LTE_DEBUG_UART("🛰️ *** NMEA GPS DATA DETECTED *** - PRESERVING before flush!");
+                
+                // PRESERVE NMEA DATA instead of destroying it with flush
+                char* nmea_start = strstr(debug_buffer, "$G");
+                if (nmea_start) {
+                    size_t nmea_data_size = read_len - (nmea_start - debug_buffer);
+                    if (nmea_data_size > 0 && nmea_data_size < sizeof(preserved_nmea_buffer)) {
+                        memcpy(preserved_nmea_buffer, nmea_start, nmea_data_size);
+                        preserved_nmea_length = nmea_data_size;
+                        preserved_nmea_buffer[preserved_nmea_length] = '\0';
+                        LTE_DEBUG_UART("💾 PRESERVED %d bytes of NMEA data for GPS processing", nmea_data_size);
+                    }
+                }
+            }
+            if (strstr(debug_buffer, "+C")) {
+                LTE_DEBUG_UART("📡 AT command responses detected");
+            }
+            if (strstr(debug_buffer, "OK")) {
+                LTE_DEBUG_UART("✅ AT OK responses detected");
+            }
+        }
+    }
+    
+    // NOW flush UART - but NMEA data is preserved above
     uart_flush(UART_NUM_1);
-    LTE_DEBUG_UART("UART flushed before send");
+    LTE_DEBUG_UART("� UART FLUSHED - NMEA data preserved in buffer");
     
     // Send character-by-character with delays (following Waveshare Arduino example pattern)
     // This is critical for SIM7670G reliable communication
@@ -537,6 +603,9 @@ static bool lte_send_at_command_impl(const char* command, at_response_t* respons
         }
     }
     
+    // CRITICAL: Release UART mutex
+    xSemaphoreGive(task_mgr->shared_uart_mutex);
+    
     return response->success;
 }
 
@@ -549,7 +618,13 @@ static bool lte_read_raw_data_impl(char* buffer, size_t buffer_size, size_t* byt
     
     *bytes_read = 0;
     
+    LTE_DEBUG_UART("📡 === ENHANCED RAW UART READ START ===");
     LTE_DEBUG_UART("📡 Reading raw UART data (timeout: %d ms, buffer: %d bytes)", timeout_ms, buffer_size);
+    
+    // ENHANCED DEBUG: Check UART status first
+    size_t available_before = 0;
+    uart_get_buffered_data_len(UART_NUM_1, &available_before);
+    LTE_DEBUG_UART("📊 UART buffer status at start: %d bytes available", available_before);
     
     // Read raw data from UART (for NMEA sentences after GPS enable)
     // SIM7670G outputs NMEA data directly to UART after AT+CGNSSTST=1
@@ -588,12 +663,65 @@ static bool lte_read_raw_data_impl(char* buffer, size_t buffer_size, size_t* byt
     *bytes_read = total_read;
     
     if (total_read > 0) {
-        LTE_DEBUG_UART("📄 Raw UART data (%d bytes): %.*s", total_read, (int)total_read, buffer);
+        LTE_DEBUG_UART("📄 Raw UART data (%d bytes):\n%.*s", total_read, (int)total_read, buffer);
+        
+        // ENHANCED DEBUG: Show hex dump of ALL UART data
+        LTE_DEBUG_UART("🔍 Raw UART hex dump:");
+        for (size_t i = 0; i < total_read; i += 16) {
+            char hex_line[64] = {0};
+            char ascii_line[17] = {0};
+            
+            for (size_t j = 0; j < 16 && (i + j) < total_read; j++) {
+                sprintf(hex_line + (j * 3), "%02X ", (unsigned char)buffer[i + j]);
+                ascii_line[j] = (buffer[i + j] >= 32 && buffer[i + j] <= 126) ? buffer[i + j] : '.';
+            }
+            
+            LTE_DEBUG_UART("   %04X: %-48s |%s|", i, hex_line, ascii_line);
+        }
+        
+        // ENHANCED DEBUG: Check for specific patterns
+        if (strstr(buffer, "$G")) {
+            LTE_DEBUG_UART("🛰️ NMEA GPS sentences detected!");
+        }
+        if (strstr(buffer, "+C")) {
+            LTE_DEBUG_UART("📡 AT command responses detected!");
+        }
+        if (strstr(buffer, "OK")) {
+            LTE_DEBUG_UART("✅ AT OK responses detected!");
+        }
+        if (strstr(buffer, "ERROR")) {
+            LTE_DEBUG_UART("❌ AT ERROR responses detected!");
+        }
+        
         return true;
     } else {
         LTE_DEBUG_UART("📭 No raw UART data available");
         return false;
     }
+}
+
+static bool lte_get_preserved_nmea_impl(char* buffer, size_t buffer_size, size_t* data_length)
+{
+    if (!buffer || !data_length || buffer_size == 0) {
+        return false;
+    }
+
+    if (preserved_nmea_length > 0 && preserved_nmea_length < buffer_size) {
+        memcpy(buffer, preserved_nmea_buffer, preserved_nmea_length);
+        buffer[preserved_nmea_length] = '\0';
+        *data_length = preserved_nmea_length;
+        
+        LTE_DEBUG_UART("📡 Retrieved %d bytes of preserved NMEA data", preserved_nmea_length);
+        
+        // Clear the buffer after retrieval
+        preserved_nmea_length = 0;
+        memset(preserved_nmea_buffer, 0, sizeof(preserved_nmea_buffer));
+        
+        return true;
+    }
+
+    *data_length = 0;
+    return false;
 }
 
 static bool lte_set_apn_impl(const char* apn, const char* username, const char* password)
@@ -776,6 +904,7 @@ static bool wait_for_at_response(const char* expected, at_response_t* response, 
     TickType_t start_time = xTaskGetTickCount();
     
     while ((xTaskGetTickCount() - start_time) < pdMS_TO_TICKS(timeout_ms)) {
+        
         int len = uart_read_bytes(UART_NUM_1, buffer + total_len, 
                                  511 - total_len, pdMS_TO_TICKS(100));
         if (len > 0) {

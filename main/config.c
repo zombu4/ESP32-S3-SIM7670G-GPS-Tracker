@@ -42,10 +42,10 @@ static tracker_system_config_t default_config = {
     .gps = {
         .enabled = true,
         .fix_timeout_ms = 60000,
-        .min_satellites = 4,
-        .data_update_interval_ms = 5000,
+        .min_satellites = 3,  // Lowered from 4 to 3 for better fix chances
+        .data_update_interval_ms = 30000,  // 30-second polling
         .debug_nmea = false,
-        .debug_output = true
+        .debug_output = false  // Reduce verbose output
     },
     
     // LTE Module Configuration
@@ -62,8 +62,8 @@ static tracker_system_config_t default_config = {
 #endif
         .network_timeout_ms = 30000,
         .max_retries = 5,
-        .debug_at_commands = true,
-        .debug_output = true
+        .debug_at_commands = false,  // Reduce AT command chatter
+        .debug_output = false        // Reduce verbose output
     },
     
     // MQTT Module Configuration
@@ -77,18 +77,18 @@ static tracker_system_config_t default_config = {
         .username = USER_CONFIG_MQTT_USERNAME,
         .password = USER_CONFIG_MQTT_PASSWORD,
 #else
-        .broker_host = "mqtt.example.com",  // CONFIGURE: Set your MQTT broker in config_user.h
+        .broker_host = "65.124.194.3",  // User's MQTT broker
         .broker_port = 1883,
-        .client_id = "esp32_gps_tracker_placeholder",
-        .topic = "tracker/data",
-        .username = "",
-        .password = "",
+        .client_id = "esp32_gps_tracker_dev",
+        .topic = "gps_tracker/data",  // User's specified topic  
+        .username = "",  // No username required
+        .password = "",  // No password required
 #endif
         .keepalive_sec = 60,
         .qos_level = 0,
         .max_retries = 3,
         .retain_messages = false,
-        .debug_output = true
+        .debug_output = false  // Reduce verbose output
     },
     
     // Battery Module Configuration
@@ -98,7 +98,7 @@ static tracker_system_config_t default_config = {
         .critical_battery_threshold = 5.0f,
         .read_interval_ms = 10000,
         .enable_charging_detection = true,
-        .debug_output = true
+        .debug_output = false  // Reduce verbose output
     },
     
     // System Configuration
@@ -109,7 +109,7 @@ static tracker_system_config_t default_config = {
         .enable_watchdog = true,
         .enable_deep_sleep = false,
         .deep_sleep_duration_ms = 300000,  // 5 minutes
-        .debug_system = true
+        .debug_system = false  // Reduce verbose output
     }
 };
 

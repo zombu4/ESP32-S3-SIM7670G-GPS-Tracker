@@ -280,7 +280,19 @@ static bool send_at_command_impl(const char* command, char* response, uint32_t t
  */
 static void feed_watchdog_impl(void)
 {
-    esp_task_wdt_reset();
+    // Only feed if current task is registered with watchdog
+    // This prevents "task not found" errors from non-task contexts
+    TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
+    if (current_task != NULL) {
+        // Only feed watchdog if we're in a task context that's likely registered
+        const char* task_name = pcTaskGetName(current_task);
+        
+        // Only feed if task name contains known patterns indicating watchdog registration
+        if (task_name && (strstr(task_name, "lte") || strstr(task_name, "gps") || strstr(task_name, "mqtt") || 
+            strstr(task_name, "battery") || strstr(task_name, "watchdog") || strstr(task_name, "data"))) {
+            esp_task_wdt_reset();
+        }
+    }
 }
 
 // ============================================================================
@@ -293,6 +305,12 @@ static void feed_watchdog_impl(void)
 void lte_management_task(void* params)
 {
     ESP_LOGI(TAG, "🔧 [Core 0] LTE Management Task started");
+    
+    // Register this task with the watchdog
+    esp_err_t err = esp_task_wdt_add(NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to add LTE task to watchdog: %s", esp_err_to_name(err));
+    }
     
     const lte_interface_t* lte = lte_get_interface();
     at_command_msg_t at_msg;
@@ -346,6 +364,9 @@ void lte_management_task(void* params)
     }
     
     ESP_LOGI(TAG, "🛑 [Core 0] LTE Management Task stopped");
+    
+    // Unregister from watchdog before deletion
+    esp_task_wdt_delete(NULL);
     vTaskDelete(NULL);
 }
 
@@ -355,6 +376,12 @@ void lte_management_task(void* params)
 void mqtt_communication_task(void* params)
 {
     ESP_LOGI(TAG, "💬 [Core 0] MQTT Communication Task started");
+    
+    // Register this task with the watchdog
+    esp_err_t err = esp_task_wdt_add(NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to add MQTT task to watchdog: %s", esp_err_to_name(err));
+    }
     
     const mqtt_interface_t* mqtt = mqtt_get_interface();
     mqtt_publish_msg_t publish_msg;
@@ -405,6 +432,9 @@ void mqtt_communication_task(void* params)
     }
     
     ESP_LOGI(TAG, "🛑 [Core 0] MQTT Communication Task stopped");
+    
+    // Unregister from watchdog before deletion
+    esp_task_wdt_delete(NULL);
     vTaskDelete(NULL);
 }
 
@@ -414,6 +444,12 @@ void mqtt_communication_task(void* params)
 void system_watchdog_task(void* params)
 {
     ESP_LOGI(TAG, "🐕 [Core 0] System Watchdog Task started");
+    
+    // Register this task with the watchdog
+    esp_err_t err = esp_task_wdt_add(NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to add watchdog task to watchdog: %s", esp_err_to_name(err));
+    }
     
     while (g_task_manager.tasks_running) {
         // Feed main watchdog
@@ -426,6 +462,9 @@ void system_watchdog_task(void* params)
     }
     
     ESP_LOGI(TAG, "🛑 [Core 0] System Watchdog Task stopped");
+    
+    // Unregister from watchdog before deletion
+    esp_task_wdt_delete(NULL);
     vTaskDelete(NULL);
 }
 
@@ -439,6 +478,12 @@ void system_watchdog_task(void* params)
 void gps_data_collection_task(void* params)
 {
     ESP_LOGI(TAG, "🛰️  [Core 1] GPS Data Collection Task started");
+    
+    // Register this task with the watchdog
+    esp_err_t err = esp_task_wdt_add(NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to add GPS task to watchdog: %s", esp_err_to_name(err));
+    }
     
     const gps_interface_t* gps = gps_get_interface();
     gps_data_t gps_data;
@@ -473,6 +518,9 @@ void gps_data_collection_task(void* params)
     }
     
     ESP_LOGI(TAG, "🛑 [Core 1] GPS Data Collection Task stopped");
+    
+    // Unregister from watchdog before deletion
+    esp_task_wdt_delete(NULL);
     vTaskDelete(NULL);
 }
 
@@ -482,6 +530,12 @@ void gps_data_collection_task(void* params)
 void battery_monitoring_task(void* params)
 {
     ESP_LOGI(TAG, "🔋 [Core 1] Battery Monitoring Task started");
+    
+    // Register this task with the watchdog
+    esp_err_t err = esp_task_wdt_add(NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to add battery task to watchdog: %s", esp_err_to_name(err));
+    }
     
     const battery_interface_t* battery = battery_get_interface();
     battery_data_t battery_data;
@@ -505,6 +559,9 @@ void battery_monitoring_task(void* params)
     }
     
     ESP_LOGI(TAG, "🛑 [Core 1] Battery Monitoring Task stopped");
+    
+    // Unregister from watchdog before deletion
+    esp_task_wdt_delete(NULL);
     vTaskDelete(NULL);
 }
 

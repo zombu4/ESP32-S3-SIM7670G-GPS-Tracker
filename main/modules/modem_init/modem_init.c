@@ -292,12 +292,61 @@ static bool initialize_gps_impl(void)
     }
     
     if (response.success) {
-        ESP_LOGI(TAG, "✅ GNSS data output enabled - NMEA sentences will be available");
+        ESP_LOGI(TAG, "✅ GNSS data output enabled");
     } else {
         ESP_LOGW(TAG, "⚠️  GNSS data response: %s", response.response);
     }
     
-    // Step 5: Test GPS polling (revert to working AT+CGNSINF method)
+    // Step 5: Switch GNSS to dedicated port (CRITICAL - from Waveshare example!)
+    ESP_LOGI(TAG, "🔄 Switching GNSS to dedicated port (AT+CGNSSPORTSWITCH=0,1)...");
+    if (!lte->send_at_command("AT+CGNSSPORTSWITCH=0,1", &response, 3000)) {
+        ESP_LOGE(TAG, "❌ Failed to switch GNSS port");
+        return false;
+    }
+    
+    if (response.success) {
+        ESP_LOGI(TAG, "✅ GNSS port switched - NMEA data now streaming to UART");
+    } else {
+        ESP_LOGW(TAG, "⚠️  GNSS port switch response: %s", response.response);
+    }
+    
+    // Step 6: Wait for NMEA stream to start (after port switch)
+    ESP_LOGI(TAG, "⏳ Waiting for NMEA stream to stabilize after port switch...");
+    vTaskDelay(pdMS_TO_TICKS(3000));  // Give GPS time to start streaming to new port
+    
+    // Step 7: Monitor for streaming NMEA data (should be continuous now)
+    ESP_LOGI(TAG, "🔍 Monitoring for continuous NMEA stream...");
+    if (lte->read_raw_data) {
+        char nmea_stream_buffer[1024];
+        memset(nmea_stream_buffer, 0, sizeof(nmea_stream_buffer));
+        size_t bytes_read = 0;
+        
+        // Monitor for 5 seconds to detect streaming NMEA
+        bool success = lte->read_raw_data(nmea_stream_buffer, sizeof(nmea_stream_buffer) - 1, &bytes_read, 5000);
+        if (success && bytes_read > 0) {
+            ESP_LOGI(TAG, "📡 Detected %d bytes of streaming data from UART:", bytes_read);
+            ESP_LOG_BUFFER_CHAR(TAG, nmea_stream_buffer, bytes_read);
+            
+            // Count NMEA sentences
+            int nmea_count = 0;
+            char* pos = nmea_stream_buffer;
+            while ((pos = strstr(pos, "$G")) != NULL) {
+                nmea_count++;
+                pos++; // Move past this sentence
+            }
+            
+            if (nmea_count > 0) {
+                ESP_LOGI(TAG, "🎉 SUCCESS! Found %d NMEA sentences streaming from GPS!", nmea_count);
+                ESP_LOGI(TAG, "✅ GPS NMEA streaming is now active after AT+CGNSSPORTSWITCH");
+            } else {
+                ESP_LOGW(TAG, "⚠️ Data found but no NMEA sentences detected");
+            }
+        } else {
+            ESP_LOGW(TAG, "📭 No streaming NMEA data detected after 5 seconds");
+        }
+    }
+    
+    // Step 8: Test GPS polling (revert to working AT+CGNSINF method)
     ESP_LOGI(TAG, "🔍 Testing GPS functionality (reverting to working method)...");
     
     at_response_t diag_response;
@@ -336,6 +385,8 @@ static bool initialize_gps_impl(void)
     // Step 6: Wait for GPS to stabilize (shorter time since we're using polling mode)
     ESP_LOGI(TAG, "⏳ Waiting for GPS to stabilize for polling mode...");
     vTaskDelay(pdMS_TO_TICKS(2000)); // Give GPS time to initialize for polling
+    
+
     
     ESP_LOGI(TAG, "✅ GPS initialization complete");
     return true;
@@ -470,23 +521,225 @@ static bool get_gps_fix_impl(gps_fix_info_t* fix_info)
     memset(fix_info, 0, sizeof(gps_fix_info_t));
     fix_info->has_fix = false;
     
-    ESP_LOGI(TAG, "📡 Reading GPS NMEA data from UART (Waveshare method)...");
+    ESP_LOGI(TAG, "📡 Reading comprehensive GPS status (SIM7670G method)...");
     
-    char uart_buffer[1024];
+    const lte_interface_t* lte = lte_get_interface();
+    if (!lte) {
+        ESP_LOGE(TAG, "❌ LTE interface not available for GPS");
+        return false;
+    }
     
-    // Read NMEA sentences from UART with mutex protection
-    if (read_nmea_from_uart(uart_buffer, sizeof(uart_buffer), 2000)) {
-        // Store raw NMEA data
-        strncpy(fix_info->nmea_data, uart_buffer, sizeof(fix_info->nmea_data) - 1);
-        
-        // Parse NMEA sentences line by line
-        char* line_start = uart_buffer;
-        char* line_end;
-        
-        while ((line_end = strchr(line_start, '\n')) != NULL) {
-            *line_end = '\0';  // Null terminate the line
+    // First check for any existing NMEA data in UART buffer
+    ESP_LOGI(TAG, "🔍 Pre-check: Monitoring raw UART for NMEA data...");
+    if (lte->read_raw_data) {
+        char raw_buffer[1024];
+        memset(raw_buffer, 0, sizeof(raw_buffer));
+        size_t bytes_read = 0;
+        bool success = lte->read_raw_data(raw_buffer, sizeof(raw_buffer) - 1, &bytes_read, 5000);  // 5 second timeout
+        if (success && bytes_read > 0) {
+            ESP_LOGI(TAG, "📡 Pre-check found %d bytes of raw UART data:", bytes_read);
+            ESP_LOGI(TAG, "📄 Raw UART content: '%.*s'", bytes_read, raw_buffer);
             
-            // Remove carriage return if present
+            // Detailed NMEA analysis
+            if (strstr(raw_buffer, "$G")) {
+                ESP_LOGI(TAG, "🎉 NMEA SENTENCES FOUND! GPS is outputting NMEA data!");
+                
+                // Count different sentence types
+                int gprmc_count = 0, gpgga_count = 0, gpgsa_count = 0, gpgsv_count = 0;
+                char* ptr = raw_buffer;
+                while ((ptr = strstr(ptr, "$GPRMC")) != NULL) { gprmc_count++; ptr++; }
+                ptr = raw_buffer;
+                while ((ptr = strstr(ptr, "$GPGGA")) != NULL) { gpgga_count++; ptr++; }
+                ptr = raw_buffer;  
+                while ((ptr = strstr(ptr, "$GPGSA")) != NULL) { gpgsa_count++; ptr++; }
+                ptr = raw_buffer;
+                while ((ptr = strstr(ptr, "$GPGSV")) != NULL) { gpgsv_count++; ptr++; }
+                
+                ESP_LOGI(TAG, "   NMEA Sentence counts: RMC:%d GGA:%d GSA:%d GSV:%d", 
+                         gprmc_count, gpgga_count, gpgsa_count, gpgsv_count);
+            } else {
+                ESP_LOGI(TAG, "⚠️ No NMEA sentences in 5-second monitoring period");
+                ESP_LOGI(TAG, "   This suggests NMEA output might not be properly enabled");
+            }
+        } else {
+            ESP_LOGI(TAG, "📭 No raw UART data during 5-second monitoring");
+            ESP_LOGI(TAG, "   This suggests no NMEA output is being generated");
+        }
+    }
+    
+    at_response_t response = {0};
+    
+    // === COMPREHENSIVE GNSS STATUS CHECK ===
+    
+    // 1. Check GNSS power status
+    ESP_LOGI(TAG, "🔋 Checking GNSS power status...");
+    if (lte->send_at_command("AT+CGNSSPWR?", &response, 3000) && response.success) {
+        ESP_LOGI(TAG, "   Power Status: %s", response.response);
+    }
+    
+    // 2. Check GNSS test mode status  
+    ESP_LOGI(TAG, "📡 Checking GNSS test mode...");
+    if (lte->send_at_command("AT+CGNSSTST?", &response, 3000) && response.success) {
+        ESP_LOGI(TAG, "   Test Mode: %s", response.response);
+    }
+    
+    // 3. Get satellite information
+    ESP_LOGI(TAG, "🛰️ Getting satellite information...");
+    if (lte->send_at_command("AT+CGNSSINFO", &response, 5000) && response.success) {
+        ESP_LOGI(TAG, "   Satellite Info: %s", response.response);
+    } else {
+        ESP_LOGW(TAG, "   AT+CGNSSINFO not available, trying alternatives...");
+    }
+    
+    // 4. Try GNSS status command
+    ESP_LOGI(TAG, "📊 Getting GNSS status...");
+    if (lte->send_at_command("AT+CGNSS?", &response, 3000) && response.success) {
+        ESP_LOGI(TAG, "   GNSS Status: %s", response.response);
+    }
+    
+    // 5. Main GPS position info
+    ESP_LOGI(TAG, "📍 Getting GPS position data...");
+    if (!lte->send_at_command("AT+CGPSINFO", &response, 5000) || !response.success) {
+        ESP_LOGW(TAG, "❌ AT+CGPSINFO failed or no response");
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "📡 GPS Position (AT+CGPSINFO): %s", response.response);
+    
+    // Check for any raw NMEA data in UART buffer after GPS query
+    ESP_LOGI(TAG, "🔍 Checking for raw NMEA data after GPS query...");
+    if (lte->read_raw_data) {
+        char nmea_buffer[512];
+        memset(nmea_buffer, 0, sizeof(nmea_buffer));
+        size_t bytes_read = 0;
+        bool success = lte->read_raw_data(nmea_buffer, sizeof(nmea_buffer) - 1, &bytes_read, 3000);
+        if (success && bytes_read > 0) {
+            ESP_LOGI(TAG, "📡 Found %d bytes of raw UART data after GPS query:", bytes_read);
+            ESP_LOGI(TAG, "📄 Raw UART content: '%.*s'", bytes_read, nmea_buffer);
+            
+            // Check for NMEA sentences
+            if (strstr(nmea_buffer, "$G")) {
+                ESP_LOGI(TAG, "🎉 NMEA SENTENCES DETECTED in raw buffer!");
+                
+                // Look for specific NMEA sentence types
+                if (strstr(nmea_buffer, "$GPRMC")) ESP_LOGI(TAG, "   Found $GPRMC (Recommended Minimum)");
+                if (strstr(nmea_buffer, "$GPGGA")) ESP_LOGI(TAG, "   Found $GPGGA (Global Positioning System Fix Data)");
+                if (strstr(nmea_buffer, "$GPGSA")) ESP_LOGI(TAG, "   Found $GPGSA (GPS DOP and active satellites)");
+                if (strstr(nmea_buffer, "$GPGSV")) ESP_LOGI(TAG, "   Found $GPGSV (GPS Satellites in view)");
+            } else {
+                ESP_LOGI(TAG, "⚠️ No NMEA sentences found in raw buffer");
+                ESP_LOGI(TAG, "   Raw buffer contains: non-NMEA data or AT responses");
+            }
+        } else {
+            ESP_LOGI(TAG, "📭 No additional raw UART data after GPS query");
+        }
+    }
+    
+    // Parse AT+CGPSINFO response: +CGPSINFO: <lat>,<lon>,<alt>,<UTC time>,<TTFF>,<num>,<speed>,<course>
+    if (strstr(response.response, "+CGPSINFO:")) {
+        char* cgpsinfo_line = strstr(response.response, "+CGPSINFO:");
+        if (cgpsinfo_line) {
+            // Store raw GPS data
+            strncpy(fix_info->nmea_data, response.response, sizeof(fix_info->nmea_data) - 1);
+            
+            // Parse CGPSINFO response - handle empty fields properly
+            char* tokens[10];
+            char* line_copy = strdup(cgpsinfo_line);
+            char* data_start = line_copy + 11; // Skip "+CGPSINFO: "
+            int token_count = 0;
+            
+            // Manual parsing to handle empty comma-separated fields
+            char* current = data_start;
+            char* next_comma = strchr(current, ',');
+            
+            while (token_count < 10) {
+                if (next_comma) {
+                    *next_comma = '\0';  // Terminate current token
+                    tokens[token_count] = current;
+                    current = next_comma + 1;
+                    next_comma = strchr(current, ',');
+                } else {
+                    // Last token (or only token)
+                    tokens[token_count] = current;
+                    token_count++;
+                    break;
+                }
+                token_count++;
+            }
+            
+            ESP_LOGI(TAG, "🛰️ GPS Tokens parsed: %d", token_count);
+            
+            // Always process GPS response - even if coordinates are empty
+            // AT+CGPSINFO format: lat,lon,alt,UTC,TTFF,satellites_used,speed,course
+            if (token_count >= 6) {
+                // Check if we have valid coordinates (non-empty lat/lon)
+                bool has_coordinates = (strlen(tokens[0]) > 0 && strlen(tokens[1]) > 0);
+                
+                if (has_coordinates) {
+                    // GPS has valid fix with coordinates
+                    fix_info->has_fix = true;
+                    fix_info->latitude = atof(tokens[0]);   // First token is latitude
+                    fix_info->longitude = atof(tokens[1]);  // Second token is longitude
+                    fix_info->altitude = atof(tokens[2]);   // Third token is altitude
+                    
+                    // Store UTC time if available
+                    if (strlen(tokens[3]) > 0) {
+                        strncpy(fix_info->fix_time, tokens[3], sizeof(fix_info->fix_time) - 1);
+                    }
+                    
+                    ESP_LOGI(TAG, "🎯 GPS FIX ACQUIRED!");
+                    ESP_LOGI(TAG, "   📍 Position: %.6f, %.6f (altitude: %.1fm)", 
+                             fix_info->latitude, fix_info->longitude, fix_info->altitude);
+                } else {
+                    // GPS running but no satellite fix yet  
+                    fix_info->has_fix = false;
+                    fix_info->latitude = 0.0;
+                    fix_info->longitude = 0.0;
+                    fix_info->altitude = 0.0;
+                    
+                    ESP_LOGI(TAG, "📡 GPS ACTIVE - Searching for satellites...");
+                    ESP_LOGI(TAG, "   📍 Position: No fix yet (0.000000, 0.000000)");
+                }
+                
+                // Parse satellite count (6th field) regardless of fix status
+                if (token_count >= 6 && strlen(tokens[5]) > 0) {
+                    fix_info->satellites_used = atoi(tokens[5]);
+                } else {
+                    fix_info->satellites_used = 0;  // No satellites or empty field
+                }
+                
+                ESP_LOGI(TAG, "   🛰️ Satellites: %d", fix_info->satellites_used);
+                ESP_LOGI(TAG, "   ⏰ UTC Time: %s", strlen(fix_info->fix_time) > 0 ? fix_info->fix_time : "No time");
+                
+                // Show detailed field breakdown
+                ESP_LOGI(TAG, "   � Field Details:");
+                ESP_LOGI(TAG, "      Field 0 (Latitude): [%s]", tokens[0]);
+                ESP_LOGI(TAG, "      Field 1 (Longitude): [%s]", tokens[1]);
+                ESP_LOGI(TAG, "      Field 2 (Altitude): [%s]", tokens[2]);
+                ESP_LOGI(TAG, "      Field 3 (UTC Time): [%s]", tokens[3]);
+                ESP_LOGI(TAG, "      Field 4 (TTFF): [%s]", tokens[4]);
+                ESP_LOGI(TAG, "      Field 5 (Satellites): [%s]", tokens[5]);
+                if (token_count > 6) ESP_LOGI(TAG, "      Field 6 (Speed): [%s]", tokens[6]);
+                if (token_count > 7) ESP_LOGI(TAG, "      Field 7 (Course): [%s]", tokens[7]);
+                
+                free(line_copy);
+                return true;  // Always return true - GPS is responding
+            } else {
+                ESP_LOGW(TAG, "📡 Unexpected GPS response format - not enough tokens");
+                ESP_LOGI(TAG, "   Raw data: %s", response.response);
+            }
+            
+            free(line_copy);
+        }
+    } else {
+        ESP_LOGI(TAG, "📡 No +CGPSINFO found in response: %s", response.response);
+    }
+    
+    ESP_LOGW(TAG, "❌ No valid GPS data in AT+CGPSINFO response");
+    return false;
+}
+/*           
+            // Remove carriage return if present (BROKEN CODE - COMMENTED OUT)
             if (line_end > line_start && *(line_end - 1) == '\r') {
                 *(line_end - 1) = '\0';
             }
@@ -517,7 +770,7 @@ static bool get_gps_fix_impl(gps_fix_info_t* fix_info)
         ESP_LOGD(TAG, "📭 No NMEA data available from UART");
         return false;
     }
-}
+*/ // END BROKEN CODE
 
 /**
  * @brief Wait for GPS fix with timeout

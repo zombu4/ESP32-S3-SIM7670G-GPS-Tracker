@@ -72,3 +72,7 @@ const char* mqtt_status_to_string(mqtt_status_t status);
 bool mqtt_create_message(mqtt_message_t* msg, const char* topic, const char* payload, int qos, bool retain);
 bool mqtt_validate_topic(const char* topic);
 void mqtt_print_stats(const mqtt_stats_t* stats);
+
+// Convenience functions
+bool mqtt_publish_gps_data(const char* latitude, const char* longitude, 
+                          float battery_voltage, int battery_percentage);
