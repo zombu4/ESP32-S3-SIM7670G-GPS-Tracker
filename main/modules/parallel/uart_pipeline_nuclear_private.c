@@ -100,7 +100,7 @@ static esp_err_t nuclear_setup_esp32s3_uart_dma(nuclear_uart_pipeline_t *pipelin
                              GDMA_BUFFER_SIZE * 2,  // TX buffer  
                              16,                    // Event queue size
                              &pipeline->uart_event_queue, // Store queue handle
-                             ESP_INTR_FLAG_IRAM);   // IRAM interrupt for speed
+                             0);                    // Use default flags (IRAM enabled via CONFIG_UART_ISR_IN_IRAM)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "❌ UART driver install failed: %s", esp_err_to_name(ret));
         return ret;
@@ -314,20 +314,49 @@ void nuclear_stream_demultiplexer_task(void *parameters)
                                            GDMA_BUFFER_SIZE, pdMS_TO_TICKS(10));
             
             if (bytes_read > 0) {
+                // 💀🔥 ULTRA VERBOSE UART DEBUGGING 🔥💀
+                // Null-terminate for safe string operations
+                read_buffer[bytes_read] = '\0';
+                
+                ESP_LOGI(TAG, "💀🔥 RAW UART DATA [%d bytes]: '%.*s'", bytes_read, 
+                         bytes_read < 128 ? bytes_read : 128, read_buffer);
+                
+                // Show hex dump for binary analysis
+                if (bytes_read > 0) {
+                    char hex_dump[256] = {0};
+                    int hex_pos = 0;
+                    for (int i = 0; i < bytes_read && i < 64 && hex_pos < 240; i++) {
+                        hex_pos += snprintf(hex_dump + hex_pos, sizeof(hex_dump) - hex_pos, 
+                                          "%02X ", (unsigned char)read_buffer[i]);
+                    }
+                    ESP_LOGI(TAG, "💀🔥 HEX DUMP: %s", hex_dump);
+                }
+                
                 // ESP32-S3 optimized stream detection using native instructions
                 nuclear_stream_type_t type = nuclear_detect_stream_type(read_buffer, bytes_read);
+                
+                ESP_LOGI(TAG, "💀🔥 STREAM TYPE DETECTED: %s", 
+                         (type == STREAM_TYPE_NMEA) ? "NMEA GPS" : 
+                         (type == STREAM_TYPE_AT_RESPONSE) ? "AT RESPONSE" :
+                         (type == STREAM_TYPE_AT_CMD) ? "AT COMMAND" : "UNKNOWN");
                 
                 // Route to appropriate ring buffer with zero-copy
                 if (type == STREAM_TYPE_NMEA) {
                     if (xRingbufferSend(pipeline->gps_ringbuf, read_buffer, bytes_read, 0) == pdTRUE) {
                         pipeline->gps_packets++;
+                        ESP_LOGI(TAG, "🛰️ GPS NMEA DATA ROUTED: %d bytes → GPS ringbuffer", bytes_read);
+                    } else {
+                        ESP_LOGE(TAG, "❌ FAILED to route GPS data to ringbuffer (buffer full?)");
                     }
-                    ESP_LOGD(TAG, "📡 GPS: %d bytes", bytes_read);
                 } else if (type == STREAM_TYPE_AT_RESPONSE || type == STREAM_TYPE_AT_CMD) {
                     if (xRingbufferSend(pipeline->cellular_ringbuf, read_buffer, bytes_read, 0) == pdTRUE) {
                         pipeline->cellular_packets++;
+                        ESP_LOGI(TAG, "📱 CELLULAR DATA ROUTED: %d bytes → Cellular ringbuffer", bytes_read);
+                    } else {
+                        ESP_LOGE(TAG, "❌ FAILED to route cellular data to ringbuffer (buffer full?)");
                     }
-                    ESP_LOGD(TAG, "📱 Cellular: %d bytes", bytes_read);
+                } else {
+                    ESP_LOGW(TAG, "⚠️ UNKNOWN DATA TYPE - NOT ROUTED: %d bytes", bytes_read);
                 }
                 
                 // Update performance statistics
@@ -349,22 +378,58 @@ void nuclear_stream_demultiplexer_task(void *parameters)
     vTaskDelete(NULL);
 }
 
-// 💀🔥 ESP32-S3 OPTIMIZED STREAM DETECTION 🔥💀
+// 💀🔥 ESP32-S3 OPTIMIZED STREAM DETECTION WITH FRAGMENTATION SUPPORT 🔥💀
 
 nuclear_stream_type_t nuclear_detect_stream_type(const uint8_t *data, size_t len)
 {
     if (len == 0 || !data) return STREAM_TYPE_UNKNOWN;
     
-    // ESP32-S3 Xtensa LX7 optimized byte comparison
-    // Use native instructions for fast character detection
+    // 💀🔥 ULTRA VERBOSE STREAM DETECTION DEBUGGING 🔥💀
+    ESP_LOGI("STREAM_DEBUG", "🔍 ANALYZING DATA [%d bytes]: First char = 0x%02X ('%c')", 
+             (int)len, data[0], (data[0] >= 32 && data[0] < 127) ? data[0] : '?');
     
-    // NMEA sentences start with '$'
+    // CRITICAL FIX: NMEA sentences start with '$' - CHECK THIS FIRST!
     if (data[0] == '$') {
+        ESP_LOGI("STREAM_DEBUG", "🎯 NMEA SENTENCE DETECTED! First char = '$' (0x24)");
         return STREAM_TYPE_NMEA;
     }
     
-    // AT responses start with '+'
+    // Check for NMEA sentences that might have leading whitespace or newlines
+    for (size_t i = 0; i < len && i < 10; i++) {
+        if (data[i] == '$') {
+            ESP_LOGI("STREAM_DEBUG", "🎯 NMEA SENTENCE FOUND at offset %d! Data: %.*s", 
+                     (int)i, (int)(len - i) < 32 ? (int)(len - i) : 32, &data[i]);
+            return STREAM_TYPE_NMEA;
+        }
+    }
+    
+    // 🎯 NEW: DETECT FRAGMENTED NMEA DATA
+    // NMEA fragments contain: numbers, commas, letters, asterisks, newlines
+    bool looks_like_nmea_fragment = false;
+    int nmea_chars = 0;
+    int total_printable = 0;
+    
+    for (size_t i = 0; i < len && i < 32; i++) {
+        char c = data[i];
+        if (c >= 32 && c < 127) total_printable++;
+        
+        // NMEA contains: digits, commas, dots, letters, asterisks, CR/LF
+        if ((c >= '0' && c <= '9') || c == ',' || c == '.' || 
+            (c >= 'A' && c <= 'Z') || c == '*' || c == '\r' || c == '\n') {
+            nmea_chars++;
+        }
+    }
+    
+    // If >80% of printable characters look like NMEA, it's probably a fragment
+    if (total_printable > 5 && nmea_chars > (total_printable * 4 / 5)) {
+        ESP_LOGI("STREAM_DEBUG", "🎯 NMEA FRAGMENT DETECTED! %d/%d chars NMEA-like: %.*s", 
+                 nmea_chars, total_printable, len < 32 ? (int)len : 32, data);
+        return STREAM_TYPE_NMEA;
+    }
+    
+    // AT responses start with '+' (like +CGNSSPWR:)
     if (data[0] == '+') {
+        ESP_LOGI("STREAM_DEBUG", "📱 AT RESPONSE DETECTED! Starts with '+'");
         return STREAM_TYPE_AT_RESPONSE;
     }
     
@@ -372,19 +437,30 @@ nuclear_stream_type_t nuclear_detect_stream_type(const uint8_t *data, size_t len
     if (len >= 2) {
         uint16_t first_two = *(uint16_t*)data;
         if ((first_two & 0x5F5F) == 0x5441) { // "AT" in little-endian, case insensitive
+            ESP_LOGI("STREAM_DEBUG", "📱 AT COMMAND DETECTED! Starts with 'AT'");
             return STREAM_TYPE_AT_CMD;
         }
     }
     
-    // Check for common responses using optimized string comparison
+    // Check for common AT responses
     if (len >= 2 && (data[0] == 'O' && data[1] == 'K')) {
+        ESP_LOGI("STREAM_DEBUG", "📱 AT RESPONSE DETECTED! 'OK' response");
         return STREAM_TYPE_AT_RESPONSE;
     }
     
     if (len >= 5 && strncmp((char*)data, "ERROR", 5) == 0) {
+        ESP_LOGI("STREAM_DEBUG", "📱 AT RESPONSE DETECTED! 'ERROR' response");
         return STREAM_TYPE_AT_RESPONSE;
     }
     
+    // Check for other AT response patterns
+    if (len >= 4 && strncmp((char*)data, "READY", 5) == 0) {
+        ESP_LOGI("STREAM_DEBUG", "📱 AT RESPONSE DETECTED! 'READY' response");
+        return STREAM_TYPE_AT_RESPONSE;
+    }
+    
+    ESP_LOGW("STREAM_DEBUG", "❓ UNKNOWN DATA TYPE! First few bytes: %.*s", 
+             len < 16 ? (int)len : 16, data);
     return STREAM_TYPE_UNKNOWN;
 }
 

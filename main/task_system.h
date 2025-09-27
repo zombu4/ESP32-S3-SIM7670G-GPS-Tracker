@@ -23,7 +23,7 @@ extern tracker_system_config_t system_config;
 // Stack sizes optimized for ESP32-S3 32-bit mode with 2MB PSRAM
 #define TASK_STACK_SIZE_SYSTEM_MONITOR  12288   // 12KB - More space for monitoring
 #define TASK_STACK_SIZE_CELLULAR        8192    // 8KB - LTE/AT commands need buffer space  
-#define TASK_STACK_SIZE_GPS             6144    // 6KB - NMEA parsing with larger buffers
+#define TASK_STACK_SIZE_GPS             12288   // 12KB - Increased for raw debug + AT+CGNSINF processing
 #define TASK_STACK_SIZE_MQTT            10240   // 10KB - JSON payload handling
 #define TASK_STACK_SIZE_BATTERY         4096    // 4KB - Simple I2C operations
 

@@ -298,17 +298,17 @@ static bool lte_deinit_impl(void)
 
 static bool lte_connect_impl(void)
 {
+ ESP_LOGI(TAG, "🔥 CELLULAR DEBUG: lte_connect_impl() called - starting connection process");
+ 
  if (!module_initialized) {
- ESP_LOGE(TAG, "LTE module not initialized");
+ ESP_LOGE(TAG, "❌ LTE module not initialized - cannot connect");
  return false;
  }
- 
+
  if (module_status.connection_status == LTE_STATUS_CONNECTED) {
- ESP_LOGI(TAG, "Already connected to network");
+ ESP_LOGI(TAG, "✅ Already connected to network - returning success");
  return true;
- }
- 
- LTE_DEBUG_NET("=== STARTING CELLULAR NETWORK CONNECTION ===");
+ } LTE_DEBUG_NET("=== STARTING CELLULAR NETWORK CONNECTION ===");
  LTE_DEBUG_NET("APN: '%s'", current_config.apn);
  LTE_DEBUG_NET("Network timeout: %d ms", current_config.network_timeout_ms);
  ESP_LOGI(TAG, "Connecting to cellular network...");
@@ -413,6 +413,11 @@ static bool lte_disconnect_impl(void)
 
 static lte_status_t lte_get_connection_status_impl(void)
 {
+ ESP_LOGI(TAG, "🔍 CELLULAR STATUS CHECK: Current status = %d (%s)", 
+          module_status.connection_status,
+          module_status.connection_status == LTE_STATUS_CONNECTED ? "CONNECTED" :
+          module_status.connection_status == LTE_STATUS_CONNECTING ? "CONNECTING" :
+          module_status.connection_status == LTE_STATUS_DISCONNECTED ? "DISCONNECTED" : "ERROR");
  return module_status.connection_status;
 }
 

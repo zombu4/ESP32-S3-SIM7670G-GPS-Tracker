@@ -6,7 +6,20 @@
  * Features:
  * - Zero-CPU GDMA streaming with linked-list descriptors
  * - Hardware ETM event matrix triggering
- * - Real-time AT/NMEA stream demultiplexing  
+static data_stream_type_t classify_data(const uint8_t *data, size_t len)
+{
+    if (!data || len < 2) {
+        return STREAM_TYPE_UNKNOWN;
+    }
+    
+    // Debug: Show all data being classified
+    ESP_LOGI("NUCLEAR_DEBUG", "📊 CLASSIFYING DATA [%d bytes]: %.*s", (int)len, (int)len < 32 ? (int)len : 32, data);
+    
+    // Check for NMEA sentences
+    if (data[0] == '$' && data[1] == 'G') {
+        ESP_LOGI("NUCLEAR_DEBUG", "🛰️ DETECTED NMEA SENTENCE: %.*s", (int)len < 64 ? (int)len : 64, data);
+        return STREAM_TYPE_NMEA;
+    }ime AT/NMEA stream demultiplexing  
  * - Triple-buffer producer-consumer pipeline
  * - Cache-aligned PSRAM optimization
  * - IRAM interrupt handlers for zero-jitter performance
@@ -254,6 +267,7 @@ static nuclear_stream_type_t IRAM_ATTR nuclear_detect_stream_type(const uint8_t 
     
     // Check for NMEA sentences
     if (data[0] == '$' && data[1] == 'G') {
+        ESP_LOGI("NUCLEAR_DEBUG", "🛰️ DETECTED NMEA SENTENCE: %.*s", (int)len < 64 ? (int)len : 64, data);
         return STREAM_TYPE_NMEA;
     }
     

@@ -7,13 +7,27 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "string.h"
 #include "driver/uart.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "NUCLEAR_INTEGRATION";
 
+// Forward declarations
+static bool nuclear_execute_real_gps_command(const char* command, char* response, size_t response_size, int timeout_ms);
+bool nuclear_gps_status_check(void);
+
 // Global integration manager
 nuclear_integration_manager_t *g_nuclear_integration = NULL;
+
+// 💀🔥 MUTEX FOR AT COMMAND COLLISION PREVENTION 🔥💀
+static SemaphoreHandle_t g_at_command_mutex = NULL;
+
+nuclear_integration_manager_t* get_nuclear_integration_manager(void)
+{
+    return g_nuclear_integration;
+}
 static nuclear_uart_pipeline_t g_pipeline_instance;
 
 // 💀🔥 INTEGRATION INITIALIZATION 🔥💀
@@ -29,6 +43,16 @@ esp_err_t nuclear_integration_init(nuclear_integration_manager_t *manager)
     
     memset(manager, 0, sizeof(nuclear_integration_manager_t));
     g_nuclear_integration = manager;
+    
+    // 💀🔥 CREATE AT COMMAND MUTEX FOR COLLISION PREVENTION 🔥💀
+    if (!g_at_command_mutex) {
+        g_at_command_mutex = xSemaphoreCreateMutex();
+        if (!g_at_command_mutex) {
+            ESP_LOGE(TAG, "Failed to create AT command mutex");
+            return ESP_ERR_NO_MEM;
+        }
+        ESP_LOGI(TAG, "✅ AT command collision prevention mutex created");
+    }
     
     // Initialize nuclear pipeline
     manager->pipeline = &g_pipeline_instance;
@@ -202,7 +226,20 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
         return false;
     }
     
-    ESP_LOGW(TAG, "🔥 Nuclear AT command: %s", command);
+    // 💀🔥 CRITICAL: TAKE MUTEX TO PREVENT AT COMMAND COLLISIONS 🔥💀
+    if (!g_at_command_mutex) {
+        ESP_LOGE(TAG, "AT command mutex not initialized!");
+        return false;
+    }
+    
+    if (xSemaphoreTake(g_at_command_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        ESP_LOGW(TAG, "⚠️ AT command mutex timeout - potential collision detected!");
+        return false;
+    }
+    
+    ESP_LOGW(TAG, "🔥 Nuclear AT command (MUTEX PROTECTED): %s", command);
+    
+    bool result = false;
     
     // 💀🔥 ESP32-S3 NUCLEAR AT COMMAND IMPLEMENTATION 🔥💀
     // 
@@ -213,96 +250,120 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
     // Simulate successful responses for critical commands to prevent system blocking
     // while the nuclear pipeline handles the actual communication through proper channels.
     
-    // ========== GPS COMMANDS ==========
+    // ========== GPS COMMANDS - EXECUTE ON REAL HARDWARE ==========
     // Handle GPS power command (critical for GPS initialization)
     if (strstr(command, "AT+CGNSSPWR=1") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS power command handled");
-        strcpy(response, "+CGNSSPWR: 1\r\nOK\r\n");
-        return true;
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS power command - EXECUTING ON REAL GPS HARDWARE");
+        result = nuclear_execute_real_gps_command(command, response, response_size, 5000);
+        goto cleanup;
     }
     
-    // Handle GPS status test command
+    // Handle GPS disable power command
+    if (strstr(command, "AT+CGNSSPWR=0") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS power OFF command - EXECUTING ON REAL GPS HARDWARE");
+        result = nuclear_execute_real_gps_command(command, response, response_size, 5000);
+        goto cleanup;
+    }
+    
+    // Handle GPS status test command (enable NMEA streaming)
     if (strstr(command, "AT+CGNSSTST=1") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS status test handled");  
-        strcpy(response, "+CGNSSTST: 1\r\nOK\r\n");
-        return true;
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS NMEA streaming command - EXECUTING ON REAL GPS HARDWARE");  
+        result = nuclear_execute_real_gps_command(command, response, response_size, 5000);
+        goto cleanup;
     }
     
-    // Handle GPS info polling (return no fix for indoor testing)
-    if (strstr(command, "AT+CGNSINF") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS info polling handled (no fix - indoor)");
-        strcpy(response, "+CGNSINF: 0,0,,,,,,,,,,,,,,,,,\r\nOK\r\n");  // No fix response
-        return true;
+    // Handle GPS status test disable command
+    if (strstr(command, "AT+CGNSSTST=0") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS NMEA disable command - EXECUTING ON REAL GPS HARDWARE");
+        result = nuclear_execute_real_gps_command(command, response, response_size, 5000);
+        goto cleanup;
     }
     
-    // ========== CELLULAR COMMANDS ==========
-    // Basic AT test command
-    if (strcmp(command, "AT") == 0) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: Basic AT test handled");
-        strcpy(response, "AT\r\nOK\r\n");
-        return true;
+    // 🎯 CRITICAL: Handle GPS port switch command (this makes NMEA data flow!)
+    if (strstr(command, "AT+CGNSSPORTSWITCH=0,1") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS PORT SWITCH command - CRITICAL FOR NMEA OUTPUT!");
+        result = nuclear_execute_real_gps_command(command, response, response_size, 5000);
+        goto cleanup;
     }
     
-    // Full functionality command
-    if (strstr(command, "AT+CFUN=1") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: Full functionality command handled");
-        strcpy(response, "OK\r\n");
-        return true;
+    // Handle other GPS commands that need real hardware execution
+    if (strstr(command, "AT+CGNSSPWR?") != NULL || 
+        strstr(command, "AT+CGNSSTST?") != NULL ||
+        strstr(command, "AT+CGPS=1") != NULL ||
+        strstr(command, "AT+CGNSS=1") != NULL ||
+        strstr(command, "AT+CGNSINF") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS query/info command - EXECUTING ON REAL GPS HARDWARE");
+        result = nuclear_execute_real_gps_command(command, response, response_size, 5000);
+        goto cleanup;
     }
+    
+    // ========== CELLULAR COMMANDS - FAST SIMULATED RESPONSES ==========
     
     // SIM PIN check (no SIM PIN required as user confirmed)
     if (strstr(command, "AT+CPIN?") != NULL) {
         ESP_LOGI(TAG, "🔥 Nuclear pipeline: SIM PIN check handled (READY - no PIN required)");
         strcpy(response, "+CPIN: READY\r\nOK\r\n");
-        return true;
+        result = true;
+        goto cleanup;
     }
     
     // Signal quality command (simulate good signal for testing)
     if (strstr(command, "AT+CSQ") != NULL) {
         ESP_LOGI(TAG, "🔥 Nuclear pipeline: Signal quality handled (simulated good signal)");
         strcpy(response, "+CSQ: 21,0\r\nOK\r\n");  // Good signal strength
-        return true;
+        result = true;
+        goto cleanup;
     }
     
     // Network registration status (simulate registered)
     if (strstr(command, "AT+CREG?") != NULL) {
         ESP_LOGI(TAG, "🔥 Nuclear pipeline: Network registration handled (registered)");
         strcpy(response, "+CREG: 0,1\r\nOK\r\n");  // Registered to home network
-        return true;
+        result = true;
+        goto cleanup;
     }
     
     // Operator selection (simulate carrier info)
     if (strstr(command, "AT+COPS?") != NULL) {
         ESP_LOGI(TAG, "🔥 Nuclear pipeline: Operator selection handled (simulated carrier)");
         strcpy(response, "+COPS: 0,2,\"310260\",7\r\nOK\r\n");  // T-Mobile US
-        return true;
+        result = true;
+        goto cleanup;
     }
     
     // Activate PDP context
     if (strstr(command, "AT+CGACT=1,1") != NULL) {
         ESP_LOGI(TAG, "🔥 Nuclear pipeline: PDP context activation handled");
         strcpy(response, "OK\r\n");
-        return true;
+        result = true;
+        goto cleanup;
     }
     
     // Attach to network
     if (strstr(command, "AT+CGATT=1") != NULL) {
         ESP_LOGI(TAG, "🔥 Nuclear pipeline: Network attach handled");
         strcpy(response, "OK\r\n");
-        return true;
+        result = true;
+        goto cleanup;
     }
     
     // Define PDP context with APN
     if (strstr(command, "AT+CGDCONT") != NULL) {
         ESP_LOGI(TAG, "🔥 Nuclear pipeline: PDP context definition handled");
         strcpy(response, "OK\r\n");
-        return true;
+        result = true;
+        goto cleanup;
     }
     
     // For unhandled commands, return error
     ESP_LOGD(TAG, "🔥 Nuclear AT command not implemented: %s", command);
     strcpy(response, "ERROR\r\n");
-    return false;
+    result = false;
+
+cleanup:
+    // 💀🔥 ALWAYS RELEASE MUTEX TO PREVENT DEADLOCK 🔥💀
+    xSemaphoreGive(g_at_command_mutex);
+    return result;
 }
 
 bool nuclear_integration_is_active(void)
@@ -368,4 +429,139 @@ esp_err_t nuclear_integration_deinit(nuclear_integration_manager_t *manager)
     
     ESP_LOGI(TAG, "✅ Nuclear integration deinitialized");
     return ESP_OK;
+}
+
+// 💀🔥 NUCLEAR GPS COMMAND EXECUTION 🔥💀
+// Execute GPS commands directly on SIM7670G hardware and return real responses
+static bool nuclear_execute_real_gps_command(const char* command, char* response, size_t response_size, int timeout_ms)
+{
+    if (!command || !response || response_size == 0) {
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "🔥 Executing GPS command on real hardware: %s", command);
+    
+    // Send AT command directly via UART
+    char local_response[512] = {0};  // Increased buffer size for verbose data
+    
+    // Send command
+    uart_write_bytes(UART_NUM_1, command, strlen(command));
+    uart_write_bytes(UART_NUM_1, "\r\n", 2);
+    
+    // Read response
+    int bytes_read = uart_read_bytes(UART_NUM_1, local_response, sizeof(local_response) - 1, pdMS_TO_TICKS(timeout_ms));
+    bool success = (bytes_read > 0);
+    
+    if (bytes_read > 0) {
+        local_response[bytes_read] = '\0';
+    }
+    
+    // 🔥 VERBOSE GPS DEBUGGING 🔥
+    ESP_LOGI(TAG, "🔥 GPS RAW RESPONSE [%d bytes]: '%s'", bytes_read, local_response);
+    
+    // Print response in hex for debugging binary data
+    if (bytes_read > 0) {
+        ESP_LOGI(TAG, "🔥 GPS HEX DUMP:");
+        for (int i = 0; i < bytes_read && i < 128; i += 16) {
+            char hex_line[128] = {0};
+            char ascii_line[17] = {0};
+            int line_len = 0;
+            
+            for (int j = 0; j < 16 && (i + j) < bytes_read; j++) {
+                unsigned char byte = (unsigned char)local_response[i + j];
+                line_len += sprintf(hex_line + line_len, "%02X ", byte);
+                ascii_line[j] = (byte >= 32 && byte < 127) ? byte : '.';
+            }
+            ascii_line[16] = '\0';
+            ESP_LOGI(TAG, "🔥   %04X: %-48s |%s|", i, hex_line, ascii_line);
+        }
+    }
+    
+    ESP_LOGI(TAG, "🔥 GPS hardware response: %s (success: %s)", 
+             local_response, success ? "YES" : "NO");
+    
+    // Copy response if requested
+    if (response && response_size > 0 && local_response[0] != '\0') {
+        strncpy(response, local_response, response_size - 1);
+        response[response_size - 1] = '\0';
+    }
+    
+    // Check for successful GPS responses
+    bool command_success = success && (
+        strstr(local_response, "OK") != NULL ||
+        strstr(local_response, "READY") != NULL ||
+        strstr(local_response, "+CGNSSPWR") != NULL ||
+        strstr(local_response, "+CGNSINF") != NULL
+    );
+    
+    ESP_LOGI(TAG, "🔥 GPS command %s: %s", command, command_success ? "SUCCESS" : "FAILED");
+    
+    return command_success;
+}
+
+// 💀🔥 NUCLEAR GPS STATUS DIAGNOSTICS 🔥💀
+// Direct GPS status verification to debug NMEA data flow
+bool nuclear_gps_status_check(void)
+{
+    ESP_LOGI(TAG, "💀🔥 RUNNING NUCLEAR GPS STATUS DIAGNOSTICS 🔥💀");
+    
+    char response[1024] = {0};
+    
+    // Check GPS power status
+    ESP_LOGI(TAG, "🔍 Step 1: Checking GPS power status...");
+    if (nuclear_execute_real_gps_command("AT+CGNSSPWR?", response, sizeof(response), 2000)) {
+        ESP_LOGI(TAG, "✅ GPS power query successful: %s", response);
+    } else {
+        ESP_LOGE(TAG, "❌ GPS power query failed");
+        return false;
+    }
+    
+    // Reset watchdog before next step
+    esp_task_wdt_reset();
+    
+    // Check GPS info (should show satellite data if working)
+    ESP_LOGI(TAG, "🔍 Step 2: Checking GPS info and satellite data...");
+    if (nuclear_execute_real_gps_command("AT+CGNSINF", response, sizeof(response), 3000)) {
+        ESP_LOGI(TAG, "✅ GPS info query successful: %s", response);
+    } else {
+        ESP_LOGE(TAG, "❌ GPS info query failed");
+    }
+    
+    // Reset watchdog before next step
+    esp_task_wdt_reset();
+    
+    // Check NMEA output status
+    ESP_LOGI(TAG, "🔍 Step 3: Checking NMEA output status...");
+    if (nuclear_execute_real_gps_command("AT+CGNSSTST?", response, sizeof(response), 2000)) {
+        ESP_LOGI(TAG, "✅ NMEA output query successful: %s", response);
+    } else {
+        ESP_LOGE(TAG, "❌ NMEA output query failed");
+    }
+    
+    // Reset watchdog before UART read
+    esp_task_wdt_reset();
+    
+    // Direct UART read for NMEA sentences (bypass pipeline) - reduced timeout
+    ESP_LOGI(TAG, "🔍 Step 4: Direct UART read for NMEA data...");
+    char uart_buffer[1024] = {0};
+    int nmea_bytes = uart_read_bytes(UART_NUM_1, uart_buffer, sizeof(uart_buffer) - 1, pdMS_TO_TICKS(2000)); // Reduced from 5000ms
+    
+    if (nmea_bytes > 0) {
+        uart_buffer[nmea_bytes] = '\0';
+        ESP_LOGI(TAG, "✅ DIRECT UART READ: Found %d bytes of raw data", nmea_bytes);
+        ESP_LOGI(TAG, "🔥 RAW UART DATA: '%s'", uart_buffer);
+        
+        // Check if it contains NMEA sentences
+        if (strstr(uart_buffer, "$GP") || strstr(uart_buffer, "$GN") || strstr(uart_buffer, "$GL")) {
+            ESP_LOGI(TAG, "🎯 SUCCESS: NMEA sentences detected in UART stream!");
+            return true;
+        } else {
+            ESP_LOGW(TAG, "⚠️  Raw data found but no NMEA sentences detected");
+        }
+    } else {
+        ESP_LOGW(TAG, "❌ No data received from direct UART read");
+    }
+    
+    ESP_LOGI(TAG, "💀🔥 GPS STATUS DIAGNOSTICS COMPLETE 🔥💀");
+    return false;
 }

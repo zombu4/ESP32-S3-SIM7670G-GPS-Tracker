@@ -7,7 +7,7 @@ idf_component_register(SRCS "gps_tracker.c" "config.c" "version.c" "baud_rate_te
                            "tasks/gps_task.c"
                            "tasks/mqtt_task.c"
                            "tasks/battery_task.c"
-                           "modules/gps/gps_module.c"
+                           "modules/gps/gps_simple_nmea_reader.c"
                            "modules/gps/gps_debug.c"
                            "modules/parallel/esp32s3_ultra_parallel.c"
                            "modules/parallel/esp32s3_etm_engine.c"

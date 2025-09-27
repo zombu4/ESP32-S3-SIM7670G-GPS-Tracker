@@ -43,6 +43,12 @@ typedef struct {
     
     // Control flags
     volatile bool integration_active;
+    
+    // 🛰️ Shared GPS data (updated by nuclear GPS reader task)
+    gps_data_t latest_gps_data;
+    bool gps_data_available;
+    uint64_t gps_data_timestamp;
+    SemaphoreHandle_t gps_data_mutex;
 } nuclear_integration_manager_t;
 
 // 💀🔥 NUCLEAR INTEGRATION API 🔥💀
@@ -89,6 +95,11 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
  * Check if nuclear integration is active
  */
 bool nuclear_integration_is_active(void);
+
+/**
+ * Get nuclear integration manager for GPS data access
+ */
+nuclear_integration_manager_t* get_nuclear_integration_manager(void);
 
 // Internal task functions (forward declarations - implemented in nuclear_integration.c)
 void nuclear_gps_reader_task(void *parameters);

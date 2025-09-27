@@ -307,6 +307,19 @@ static bool initialize_gps_impl(void)
  ESP_LOGW(TAG, "GNSS power response: %s", response.response);
  }
  
+ // Step 2: Enable GNSS engine (CRITICAL - missing command!)
+ ESP_LOGI(TAG, "Enabling GNSS engine (AT+CGNSS=1)...");
+ if (!lte->send_at_command("AT+CGNSS=1", &response, 5000)) {
+ ESP_LOGE(TAG, "Failed to enable GNSS engine");
+ return false;
+ }
+ 
+ if (response.success) {
+ ESP_LOGI(TAG, "GNSS engine enabled successfully");
+ } else {
+ ESP_LOGW(TAG, "GNSS engine response: %s", response.response);
+ }
+ 
  // Step 3: Wait for GNSS to initialize
  ESP_LOGI(TAG, "Waiting for GNSS initialization...");
  vTaskDelay(pdMS_TO_TICKS(2000));

@@ -107,11 +107,13 @@ void cellular_task_entry(void* parameters) {
                     ESP_LOGI(TAG, "🌐 Starting network connection process...");
                     if (lte_if->connect) {
                         ESP_LOGI(TAG, "🔄 Calling lte_if->connect() - this may take up to 30 seconds...");
+                        ESP_LOGI(TAG, "🔍 CELLULAR DEBUG: About to call connect function...");
                         
                         // Update heartbeat before long-running operation
                         sys->cellular_task.last_heartbeat_ms = current_time;
                         
                         bool connection_result = lte_if->connect();
+                        ESP_LOGI(TAG, "🔍 CELLULAR DEBUG: Connect returned: %s", connection_result ? "SUCCESS" : "FAILED");
                         
                         // Update heartbeat after long-running operation
                         sys->cellular_task.last_heartbeat_ms = esp_timer_get_time() / 1000;

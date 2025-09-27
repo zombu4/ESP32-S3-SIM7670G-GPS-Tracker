@@ -1,6 +1,6 @@
 #include "battery_module.h"
 #include "esp_log.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -20,6 +20,8 @@ static battery_config_t current_config = {0};
 static battery_status_t module_status = {0};
 static bool module_initialized = false;
 static i2c_config_hw_t hw_config = {0};
+static i2c_master_bus_handle_t bus_handle = NULL;
+static i2c_master_dev_handle_t dev_handle = NULL;
 
 // Private function prototypes
 static bool battery_init_impl(const battery_config_t* config);
@@ -73,33 +75,45 @@ static bool battery_init_impl(const battery_config_t* config)
  hw_config.scl_pin = 2;
  hw_config.frequency_hz = 100000;
  
- // Initialize I2C
- i2c_config_t i2c_conf = {
- .mode = I2C_MODE_MASTER,
- .sda_io_num = hw_config.sda_pin,
- .scl_io_num = hw_config.scl_pin,
- .sda_pullup_en = GPIO_PULLUP_ENABLE,
- .scl_pullup_en = GPIO_PULLUP_ENABLE,
- .master.clk_speed = hw_config.frequency_hz,
+ // Initialize I2C master bus
+ i2c_master_bus_config_t i2c_bus_config = {
+     .clk_source = I2C_CLK_SRC_DEFAULT,
+     .i2c_port = hw_config.i2c_num,
+     .scl_io_num = hw_config.scl_pin,
+     .sda_io_num = hw_config.sda_pin,
+     .glitch_ignore_cnt = 7,
+     .flags.enable_internal_pullup = true,
  };
  
- esp_err_t ret = i2c_param_config(hw_config.i2c_num, &i2c_conf);
+ esp_err_t ret = i2c_new_master_bus(&i2c_bus_config, &bus_handle);
  if (ret != ESP_OK) {
- ESP_LOGE(TAG, "Failed to configure I2C: %s", esp_err_to_name(ret));
- return false;
+     ESP_LOGE(TAG, "Failed to initialize I2C master bus: %s", esp_err_to_name(ret));
+     return false;
  }
  
- ret = i2c_driver_install(hw_config.i2c_num, i2c_conf.mode, 0, 0, 0);
+ // Add MAX17048 device to the bus
+ i2c_device_config_t dev_cfg = {
+     .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+     .device_address = MAX17048_ADDR,
+     .scl_speed_hz = hw_config.frequency_hz,
+ };
+ 
+ ret = i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle);
  if (ret != ESP_OK) {
- ESP_LOGE(TAG, "Failed to install I2C driver: %s", esp_err_to_name(ret));
- return false;
+     ESP_LOGE(TAG, "Failed to add MAX17048 device: %s", esp_err_to_name(ret));
+     i2c_del_master_bus(bus_handle);
+     bus_handle = NULL;
+     return false;
  }
  
  // Check if MAX17048 is present
  if (!max17048_check_presence()) {
- ESP_LOGE(TAG, "MAX17048 not detected on I2C bus");
- i2c_driver_delete(hw_config.i2c_num);
- return false;
+     ESP_LOGE(TAG, "MAX17048 not detected on I2C bus");
+     i2c_master_bus_rm_device(dev_handle);
+     i2c_del_master_bus(bus_handle);
+     bus_handle = NULL;
+     dev_handle = NULL;
+     return false;
  }
  
  // Initialize module status
@@ -128,16 +142,25 @@ static bool battery_init_impl(const battery_config_t* config)
 
 static bool battery_deinit_impl(void)
 {
- if (!module_initialized) {
- return true;
- }
- 
- i2c_driver_delete(hw_config.i2c_num);
- memset(&module_status, 0, sizeof(module_status));
- module_initialized = false;
- 
- ESP_LOGI(TAG, "Battery module deinitialized");
- return true;
+    if (!module_initialized) {
+        return true;
+    }
+    
+    if (dev_handle) {
+        i2c_master_bus_rm_device(dev_handle);
+        dev_handle = NULL;
+    }
+    
+    if (bus_handle) {
+        i2c_del_master_bus(bus_handle);
+        bus_handle = NULL;
+    }
+    
+    memset(&module_status, 0, sizeof(module_status));
+    module_initialized = false;
+    
+    ESP_LOGI(TAG, "Battery module deinitialized");
+    return true;
 }
 
 static bool battery_read_data_impl(battery_data_t* data)
@@ -232,32 +255,18 @@ static void battery_set_debug_impl(bool enable)
 // Helper function implementations
 static esp_err_t max17048_read_register(uint8_t reg, uint16_t* value)
 {
- if (!value) {
- return ESP_ERR_INVALID_ARG;
- }
- 
- uint8_t data[2];
- i2c_cmd_handle_t cmd = i2c_cmd_link_create();
- 
- // Write register address
- i2c_master_start(cmd);
- i2c_master_write_byte(cmd, (MAX17048_ADDR << 1) | I2C_MASTER_WRITE, true);
- i2c_master_write_byte(cmd, reg, true);
- 
- // Read register value
- i2c_master_start(cmd);
- i2c_master_write_byte(cmd, (MAX17048_ADDR << 1) | I2C_MASTER_READ, true);
- i2c_master_read(cmd, data, 2, I2C_MASTER_LAST_NACK);
- i2c_master_stop(cmd);
- 
- esp_err_t ret = i2c_master_cmd_begin(hw_config.i2c_num, cmd, pdMS_TO_TICKS(1000));
- i2c_cmd_link_delete(cmd);
- 
- if (ret == ESP_OK) {
- *value = (data[0] << 8) | data[1];
- }
- 
- return ret;
+    if (!value || !dev_handle) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    uint8_t data[2];
+    esp_err_t ret = i2c_master_transmit_receive(dev_handle, &reg, 1, data, 2, pdMS_TO_TICKS(1000));
+    
+    if (ret == ESP_OK) {
+        *value = (data[0] << 8) | data[1];
+    }
+    
+    return ret;
 }
 
 static bool max17048_check_presence(void)
