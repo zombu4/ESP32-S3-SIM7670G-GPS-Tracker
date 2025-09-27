@@ -6,7 +6,7 @@ dependencies.lock
 # User Configuration (contains sensitive data)
 main/config_user.h
 
-# ⚠️ CRITICAL: Example Reference Folder - NEVER COMMIT TO GITHUB ⚠️
+# CRITICAL: Example Reference Folder - NEVER COMMIT TO GITHUB 
 examples/
 reference_code/
 sample_code/

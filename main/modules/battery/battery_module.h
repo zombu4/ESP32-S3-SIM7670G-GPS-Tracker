@@ -7,35 +7,35 @@
 
 // Battery data structure
 typedef struct {
-    float percentage;
-    float voltage;
-    bool charging;
-    bool present;
-    float charge_rate;  // mA (positive = charging, negative = discharging)
-    uint32_t charge_cycles;
-    float temperature;  // Celsius (if supported)
+ float percentage;
+ float voltage;
+ bool charging;
+ bool present;
+ float charge_rate; // mA (positive = charging, negative = discharging)
+ uint32_t charge_cycles;
+ float temperature; // Celsius (if supported)
 } battery_data_t;
 
 // Battery status
 typedef struct {
-    bool initialized;
-    bool sensor_ready;
-    uint32_t last_read_time;
-    uint32_t total_reads;
-    uint32_t read_errors;
-    bool low_battery_alert;
-    bool critical_battery_alert;
+ bool initialized;
+ bool sensor_ready;
+ uint32_t last_read_time;
+ uint32_t total_reads;
+ uint32_t read_errors;
+ bool low_battery_alert;
+ bool critical_battery_alert;
 } battery_status_t;
 
 // Battery module interface
 typedef struct {
-    bool (*init)(const battery_config_t* config);
-    bool (*deinit)(void);
-    bool (*read_data)(battery_data_t* data);
-    bool (*get_status)(battery_status_t* status);
-    bool (*calibrate)(void);
-    bool (*reset)(void);
-    void (*set_debug)(bool enable);
+ bool (*init)(const battery_config_t* config);
+ bool (*deinit)(void);
+ bool (*read_data)(battery_data_t* data);
+ bool (*get_status)(battery_status_t* status);
+ bool (*calibrate)(void);
+ bool (*reset)(void);
+ void (*set_debug)(bool enable);
 } battery_interface_t;
 
 // Get battery module interface

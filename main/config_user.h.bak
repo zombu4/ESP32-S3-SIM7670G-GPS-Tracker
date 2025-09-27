@@ -1,0 +1,75 @@
+/**
+ * Local Development Configuration for ESP32-S3-SIM7670G GPS Tracker
+ * 
+ * This file contains real configuration values for local development.
+ * The APN is not considered sensitive information, but MQTT broker details
+ * should be configured per deployment.
+ */
+
+#pragma once
+
+// =============================================================================
+// NETWORK CONFIGURATION - Local Development
+// =============================================================================
+
+// Real APN for development (not sensitive information)
+#define USER_CONFIG_APN              "m2mglobal"              // Global M2M APN for testing
+#define USER_CONFIG_APN_USERNAME     ""                       // Usually empty
+#define USER_CONFIG_APN_PASSWORD     ""                       // Usually empty
+
+// =============================================================================
+// MQTT BROKER CONFIGURATION - Complete SSL & Authentication Support
+// =============================================================================
+
+// MQTT Broker Settings
+#define USER_CONFIG_MQTT_BROKER      "65.124.194.3"           // MQTT broker IP or hostname
+#define USER_CONFIG_MQTT_PORT        1883                     // MQTT port (1883 for non-SSL, 8883 for SSL)
+#define USER_CONFIG_MQTT_TOPIC       "gps-tracker"            // MQTT topic for GPS data
+
+// MQTT Authentication (leave empty for open brokers)
+#define USER_CONFIG_MQTT_USERNAME    ""                       // MQTT username (empty = no auth)
+#define USER_CONFIG_MQTT_PASSWORD    ""                       // MQTT password (empty = no auth)
+
+// MQTT Client Configuration  
+#define USER_CONFIG_MQTT_CLIENT_ID   "ESP32GPS001"  // Simple alphanumeric client ID
+
+// MQTT SSL/TLS Configuration
+#define USER_CONFIG_MQTT_ENABLE_SSL  false                    // SSL/TLS: false=tcp://, true=ssl://
+                                                               // Note: Change port to 8883 when enabling SSL
+
+// =============================================================================
+// DEVELOPMENT SETTINGS
+// =============================================================================
+
+// =============================================================================
+// DEBUG CONFIGURATION - Development
+// =============================================================================
+
+// Enable debug output for development
+#define USER_CONFIG_GPS_DEBUG        true
+#define USER_CONFIG_LTE_DEBUG        true
+#define USER_CONFIG_MQTT_DEBUG       true
+#define USER_CONFIG_BATTERY_DEBUG    true
+
+// Enhanced LTE/UART debugging for pin troubleshooting
+#define USER_CONFIG_LTE_DEBUG_AT_COMMANDS    true    // Log AT commands and responses
+#define USER_CONFIG_LTE_DEBUG_UART_DATA      false   // Log raw UART data (very verbose)
+#define USER_CONFIG_LTE_DEBUG_NETWORK        true    // Log network operations
+#define USER_CONFIG_LTE_DEBUG_CONNECTION     true    // Log connection changes
+
+// =============================================================================
+// UART PIN CONFIGURATION - Hardware Setup
+// =============================================================================
+
+// Current default pins - may need swapping if AT commands fail
+#define USER_CONFIG_UART_TX_PIN      18     // ESP32-S3 TX -> SIM7670G RX
+#define USER_CONFIG_UART_RX_PIN      17     // ESP32-S3 RX <- SIM7670G TX
+
+// Alternative pins to try if communication fails:
+// Option 1 (Swap): TX=17, RX=18
+// Option 2: Check Waveshare documentation for board-specific pins
+// Option 3: Use multimeter to verify actual connections
+
+// UART settings
+#define USER_CONFIG_UART_BAUD_RATE   115200
+#define USER_CONFIG_UART_BUFFER_SIZE 1024

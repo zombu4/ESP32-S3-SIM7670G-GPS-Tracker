@@ -1,0 +1,43 @@
+# ESP-IDF Build System
+build/
+managed_components/
+dependencies.lock
+
+# User Configuration (contains sensitive data)
+main/config_user.h
+
+# ⚠️ CRITICAL: Example Reference Folder - NEVER COMMIT TO GITHUB ⚠️
+examples/
+reference_code/
+sample_code/
+tracker_examples/
+
+# IDE and Editor Files
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
+
+# Backup Files
+*.backup
+*-backup-*
+
+# Log Files
+*.log
+
+# ESP-IDF sdkconfig files (can be regenerated)
+sdkconfig.old
+
+# Python
+__pycache__/
+*.pyc
+
+# Documentation Build
+docs/_build/
+
+# Test Reports
+test_report.xml

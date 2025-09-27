@@ -9,19 +9,19 @@
 
 // UART Configuration (GPS/LTE Communication)
 typedef struct {
-    int uart_num;
-    int tx_pin;
-    int rx_pin;
-    int baud_rate;
-    int buffer_size;
+ int uart_num;
+ int tx_pin;
+ int rx_pin;
+ int baud_rate;
+ int buffer_size;
 } uart_config_hw_t;
 
 // I2C Configuration (Battery Monitor)
 typedef struct {
-    int i2c_num;
-    int sda_pin;
-    int scl_pin;
-    int frequency_hz;
+ int i2c_num;
+ int sda_pin;
+ int scl_pin;
+ int frequency_hz;
 } i2c_config_hw_t;
 
 // =============================================================================
@@ -30,50 +30,51 @@ typedef struct {
 
 // GPS Module Configuration
 typedef struct {
-    bool enabled;
-    int fix_timeout_ms;
-    int min_satellites;
-    int data_update_interval_ms;
-    bool debug_nmea;
-    bool debug_output;
+ bool enabled;
+ int fix_timeout_ms;
+ int min_satellites;
+ int data_update_interval_ms;
+ bool debug_nmea;
+ bool debug_output;
 } gps_config_t;
 
 // LTE Module Configuration
 typedef struct {
-    bool enabled;
-    char apn[64];
-    char username[32];
-    char password[32];
-    int network_timeout_ms;
-    int max_retries;
-    bool debug_at_commands;
-    bool debug_output;
+ bool enabled;
+ char apn[64];
+ char username[32];
+ char password[32];
+ int network_timeout_ms;
+ int max_retries;
+ bool debug_at_commands;
+ bool debug_output;
 } lte_config_t;
 
 // MQTT Module Configuration
 typedef struct {
-    bool enabled;
-    char broker_host[128];
-    int broker_port;
-    char client_id[64];
-    char topic[128];
-    char username[64];
-    char password[64];
-    int keepalive_sec;
-    int qos_level;
-    int max_retries;
-    bool retain_messages;
-    bool debug_output;
+ bool enabled;
+ char broker_host[128];
+ int broker_port;
+ char client_id[64];
+ char topic[128];
+ char username[64];
+ char password[64];
+ bool enable_ssl;
+ int keepalive_sec;
+ int qos_level;
+ int max_retries;
+ bool retain_messages;
+ bool debug_output;
 } mqtt_config_t;
 
 // Battery Module Configuration
 typedef struct {
-    bool enabled;
-    float low_battery_threshold;
-    float critical_battery_threshold;
-    int read_interval_ms;
-    bool enable_charging_detection;
-    bool debug_output;
+ bool enabled;
+ float low_battery_threshold;
+ float critical_battery_threshold;
+ int read_interval_ms;
+ bool enable_charging_detection;
+ bool debug_output;
 } battery_config_t;
 
 // =============================================================================
@@ -82,27 +83,28 @@ typedef struct {
 
 // Main System Configuration
 typedef struct {
-    // Hardware configurations
-    uart_config_hw_t uart_hw;
-    i2c_config_hw_t i2c_hw;
-    
-    // Module configurations
-    gps_config_t gps;
-    lte_config_t lte;
-    mqtt_config_t mqtt;
-    battery_config_t battery;
-    
-    // System settings
-    struct {
-        int data_collection_interval_ms;
-        int transmission_interval_ms;
-        int system_status_interval_ms;
-        bool enable_watchdog;
-        bool enable_deep_sleep;
-        int deep_sleep_duration_ms;
-        bool debug_system;
-    } system;
-    
+ // Hardware configurations
+ uart_config_hw_t uart_hw;
+ i2c_config_hw_t i2c_hw;
+ 
+ // Module configurations
+ gps_config_t gps;
+ lte_config_t lte;
+ mqtt_config_t mqtt;
+ battery_config_t battery;
+ 
+ // System settings
+ struct {
+ int data_collection_interval_ms;
+ int transmission_interval_ms; // MQTT transmission interval (60s)
+ int gps_polling_interval_ms; // GPS data collection interval (55s)
+ int system_status_interval_ms;
+ bool enable_watchdog;
+ bool enable_deep_sleep;
+ int deep_sleep_duration_ms;
+ bool debug_system;
+ } system;
+ 
 } tracker_system_config_t;
 
 // =============================================================================
@@ -128,3 +130,8 @@ void config_print(const tracker_system_config_t* config);
 bool config_update_mqtt_broker(tracker_system_config_t* config, const char* host, int port);
 bool config_update_lte_apn(tracker_system_config_t* config, const char* apn);
 bool config_update_transmission_interval(tracker_system_config_t* config, int interval_ms);
+bool config_update_mqtt_ssl(tracker_system_config_t* config, bool enable_ssl);
+bool config_update_mqtt_auth(tracker_system_config_t* config, const char* username, const char* password);
+
+// Get current MQTT configuration (from GPS tracker)
+const mqtt_config_t* gps_tracker_get_mqtt_config(void);

@@ -1,22 +1,22 @@
 # ESP32-S3-SIM7670G GPS Tracker - Copilot Instructions
 
-## 🚨 CRITICAL DEVELOPMENT RULES 🚨
+## CRITICAL DEVELOPMENT RULES 
 
 **PRECISION & ACCURACY MANDATORY:**
-- ✅ **ALWAYS** check current file contents before making ANY edits
-- ✅ **ALWAYS** verify function names, variable names, and references are EXACT
-- ✅ **ALWAYS** analyze code logic flow to ensure proper functionality  
-- ✅ **ALWAYS** be precise and concise - no unnecessary verbosity
-- ✅ **ALWAYS** test compilation after structural changes
-- ✅ **ALWAYS** validate syntax and semantics before submitting code
-- ✅ **ALWAYS** use COM4 for flashing and monitoring - NEVER auto-detect port
-- ✅ **ALWAYS** use clean builds (idf.py fullclean) - NEVER trust build cache
-- ✅ **ALWAYS** use full ESP-IDF command sequence for monitoring: `cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Documents\esp-idf-tracker"; idf.py -p COM4 monitor`
-- ❌ **NEVER** assume code structure - READ and VERIFY first
-- ❌ **NEVER** make blind edits without understanding context
-- ❌ **NEVER** introduce undefined references or broken dependencies
-- ❌ **NEVER** use cached builds - they mask configuration changes
-- ❌ **NEVER** use `idf.py -p COM4 monitor` directly - environment required
+- **ALWAYS** check current file contents before making ANY edits
+- **ALWAYS** verify function names, variable names, and references are EXACT
+- **ALWAYS** analyze code logic flow to ensure proper functionality 
+- **ALWAYS** be precise and concise - no unnecessary verbosity
+- **ALWAYS** test compilation after structural changes
+- **ALWAYS** validate syntax and semantics before submitting code
+- **ALWAYS** use COM4 for flashing and monitoring - NEVER auto-detect port
+- **ALWAYS** use clean builds (idf.py fullclean) - NEVER trust build cache
+- **ALWAYS** use full ESP-IDF command sequence for monitoring: `cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Documents\esp-idf-tracker"; idf.py -p COM4 monitor`
+- **NEVER** assume code structure - READ and VERIFY first
+- **NEVER** make blind edits without understanding context
+- **NEVER** introduce undefined references or broken dependencies
+- **NEVER** use cached builds - they mask configuration changes
+- **NEVER** use `idf.py -p COM4 monitor` directly - environment required
 
 **CODE QUALITY STANDARDS:**
 - All variable/function references must be validated as existing
@@ -25,28 +25,28 @@
 - All logic must be analyzed for proper execution flow
 
 **MODULAR ARCHITECTURE MANDATORY:**
-- ✅ **EVERY module MUST have its own separate file** - easier debugging removal
-- ✅ **EVERY function SHOULD have its own module** when practical
-- ✅ **DEBUG code MUST be in separate debug modules** - never mixed with core logic
-- ✅ **VERBOSE logging MUST be easily removable** without breaking functionality
-- ❌ **NEVER mix debug code with production logic** in same functions
-- ❌ **NEVER create monolithic functions** with embedded debug code
+- **EVERY module MUST have its own separate file** - easier debugging removal
+- **EVERY function SHOULD have its own module** when practical
+- **DEBUG code MUST be in separate debug modules** - never mixed with core logic
+- **VERBOSE logging MUST be easily removable** without breaking functionality
+- **NEVER mix debug code with production logic** in same functions
+- **NEVER create monolithic functions** with embedded debug code
 
 ## Project Overview
 
-This is a professio**Current Project State**: 🎉 **GPS & MQTT FUNCTIONALITY COMPLETE** - Major Milestone Achieved!
-- ✅ **GPS COMPLETELY OPERATIONAL** - Enhanced parsing with multi-constellation support (GPS/GLONASS/Galileo/BeiDou)
-- ✅ **Precise Positioning** - GPS fix achieved: 26.609140°N, 82.114036°W (±1.41m HDOP)
-- ✅ **Enhanced Satellite Detection** - Consistent 7+ satellites with accurate counting across all constellations  
-- ✅ **30-Second Polling** - Clean intervals with vTaskDelayUntil, reduced debug output
-- ✅ **4KB NMEA Buffer** - Complete multi-constellation data processing without truncation
-- ✅ **Production Ready** - All user requirements met, system stable and optimized
-- ✅ **4G/LTE Cellular** - Excellent connectivity (network registration, APN, ~115ms ping)
-- ✅ **Modular Architecture** - Clean interfaces with comprehensive debug capabilities
-- ✅ **Secure Configuration** - Template system and Git repository management
-- ✅ **MQTT Integration FIXED** - Support detection bug resolved, client acquisition working!
-- 🟡 **Battery Monitoring** - MAX17048 initialization successful, full functionality verification pending
-- 🎯 **Ready for Full Pipeline** - GPS + MQTT operational, ready for end-to-end data transmission testing
+This is a professio**Current Project State**: **GPS & MQTT FUNCTIONALITY COMPLETE** - Major Milestone Achieved!
+- **GPS COMPLETELY OPERATIONAL** - Enhanced parsing with multi-constellation support (GPS/GLONASS/Galileo/BeiDou)
+- **Precise Positioning** - GPS fix achieved: 26.609140°N, 82.114036°W (±1.41m HDOP)
+- **Enhanced Satellite Detection** - Consistent 7+ satellites with accurate counting across all constellations 
+- **30-Second Polling** - Clean intervals with vTaskDelayUntil, reduced debug output
+- **4KB NMEA Buffer** - Complete multi-constellation data processing without truncation
+- **Production Ready** - All user requirements met, system stable and optimized
+- **4G/LTE Cellular** - Excellent connectivity (network registration, APN, ~115ms ping)
+- **Modular Architecture** - Clean interfaces with comprehensive debug capabilities
+- **Secure Configuration** - Template system and Git repository management
+- **MQTT Integration FIXED** - Support detection bug resolved, client acquisition working!
+- **Battery Monitoring** - MAX17048 initialization successful, full functionality verification pending
+- **Ready for Full Pipeline** - GPS + MQTT operational, ready for end-to-end data transmission testing
 
 This ESP32-S3-SIM7670G GPS tracker features a fully modular architecture. The device collects precise GPS location and battery data, transmitting via MQTT over 4G cellular every 30 seconds.
 
@@ -57,7 +57,7 @@ This ESP32-S3-SIM7670G GPS tracker features a fully modular architecture. The de
 **Modular Design**: The project follows a clean interface-based modular architecture:
 
 - `main/config.h/c` - Centralized configuration system with NVS storage
-- `main/modules/gps/` - GPS module (SIM7670G GNSS functionality)  
+- `main/modules/gps/` - GPS module (SIM7670G GNSS functionality) 
 - `main/modules/lte/` - LTE/Cellular module (SIM7670G network connectivity)
 - `main/modules/mqtt/` - MQTT communication module
 - `main/modules/battery/` - Battery monitoring module (MAX17048 fuel gauge)
@@ -134,32 +134,32 @@ cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Docume
 ### Working Commands Log
 
 **Commands that have been tested and work**:
-- ✅ `cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Documents\esp-idf-tracker"; idf.py --version` - ESP-IDF v1.0.3 confirmed
-- ✅ `idf.py set-target esp32s3` - Target set successfully
-- ✅ `cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Documents\esp-idf-tracker"; idf.py build` - **BUILD SUCCESSFUL!** ✅ Complete compilation with no errors
-- ❌ `idf.py build` - Fails without environment setup, needs full command above
+- `cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Documents\esp-idf-tracker"; idf.py --version` - ESP-IDF v1.0.3 confirmed
+- `idf.py set-target esp32s3` - Target set successfully
+- `cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Documents\esp-idf-tracker"; idf.py build` - **BUILD SUCCESSFUL!** Complete compilation with no errors
+- `idf.py build` - Fails without environment setup, needs full command above
 
 **Project States & Backup Protocol**:
-- 🔄 **Always backup before compile/build operations**
+- **Always backup before compile/build operations**
 - 📁 **Keep 5 versions**: `esp-idf-tracker-backup-v1` through `esp-idf-tracker-backup-v5`
-- 💾 **Backup locations**: `c:\Users\dom\Documents\` with version suffix
-- ⚡ **Auto-rotate**: Delete oldest backup when creating new one
-- 🛡️ **Safety rule**: Never edit without recent backup
+- **Backup locations**: `c:\Users\dom\Documents\` with version suffix
+- **Auto-rotate**: Delete oldest backup when creating new one
+- **Safety rule**: Never edit without recent backup
 
 **Current Project State**: � **MAJOR FIX COMPLETE** - GPS Port Switching Error Resolved
-- ✅ Modular architecture compiled successfully  
-- ✅ 4G/LTE cellular connectivity working (network registration, APN, signal)
-- ✅ Comprehensive debug logging and AT command system
-- ✅ Secure config template system and Git repository setup
-- ✅ **GPS initialization fixed** - Removed undocumented AT+CGNSSPORTSWITCH command
-- ✅ **GPS powered on successfully** - Using Waveshare official method (AT+CGNSSPWR=1)
-- ❌ MQTT service fails to start (AT+CMQTTSTART timeout) - Next priority
-- 🟡 GPS location fix needs outdoor testing (initialization working)
-- 🟡 Battery monitoring functions need verification
-- 🚧 Full end-to-end testing required
+- Modular architecture compiled successfully 
+- 4G/LTE cellular connectivity working (network registration, APN, signal)
+- Comprehensive debug logging and AT command system
+- Secure config template system and Git repository setup
+- **GPS initialization fixed** - Removed undocumented AT+CGNSSPORTSWITCH command
+- **GPS powered on successfully** - Using Waveshare official method (AT+CGNSSPWR=1)
+- MQTT service fails to start (AT+CMQTTSTART timeout) - Next priority
+- GPS location fix needs outdoor testing (initialization working)
+- Battery monitoring functions need verification
+- Full end-to-end testing required
 
-**⚠️ CRITICAL DEVELOPMENT RULE: ALWAYS ADVANCE VERSIONING**
-- Every code change MUST bump version (patch/minor/major)  
+** CRITICAL DEVELOPMENT RULE: ALWAYS ADVANCE VERSIONING**
+- Every code change MUST bump version (patch/minor/major) 
 - Use `python update_version.py --bump [type]` before any changes
 - Use `.\bump_and_commit.ps1 [type] "message"` for quick version+commit
 - See VERSIONING_WORKFLOW.md for complete process
@@ -170,18 +170,18 @@ cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Docume
 - **Key Commands Working**: AT+CGNSSPWR=1 (GPS power) + AT+CGNSSTST=1 (NMEA output enable)
 - **Files Verified**: modem_init.c properly executes complete Waveshare GPS sequence
 - **Result**: GPS module fully operational, NMEA data output enabled, searching for satellites
-- **Status**: ✅ **GPS COMPLETELY FIXED** - Ready for outdoor satellite fix testing
+- **Status**: **GPS COMPLETELY FIXED** - Ready for outdoor satellite fix testing
 - **Next**: MQTT client acquisition error resolution for full GPS→MQTT pipeline
 
-**🎉 MQTT SUPPORT DETECTION BUG FIXED (Sept 26, 2025):**
+** MQTT SUPPORT DETECTION BUG FIXED (Sept 26, 2025):**
 - **Root Cause**: mqtt_check_support() function using invalid AT command formats for testing
 - **Problem**: Used AT+CMQTT? and AT+CMQTTSTART? (invalid help commands) causing false negatives
-- **Solution**: Changed to AT+CMQTTDISC? (query connections) and AT+CMQTTSTART (start service)  
-- **Result**: ✅ MQTT module now initializes successfully, client acquisition working
+- **Solution**: Changed to AT+CMQTTDISC? (query connections) and AT+CMQTTSTART (start service) 
+- **Result**: MQTT module now initializes successfully, client acquisition working
 - **Evidence**: AT+CMQTTDISC? returns "+CMQTTDISC: 0,1" confirming MQTT support
 - **Status**: MQTT initialization complete, ready for broker connection testing
 
-**📚 ALWAYS REFERENCE - Waveshare ESP32-S3-SIM7670G-4G Official Documentation:**
+** ALWAYS REFERENCE - Waveshare ESP32-S3-SIM7670G-4G Official Documentation:**
 - **Overview**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Overview
 - **Cat-1 Module AT Commands**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Cat-1_Module_Command_Set
 - **HTTP Implementation**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#HTTP
@@ -196,7 +196,7 @@ cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Docume
 - **Cloud Applications**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Waveshare_Cloud_Application
 - **Resources & Downloads**: https://www.waveshare.com/wiki/ESP32-S3-SIM7670G-4G#Resource
 
-**⚡ ESP-IDF WORKFLOW RULES (CRITICAL):**
+** ESP-IDF WORKFLOW RULES (CRITICAL):**
 - **COM Port Management**: ALWAYS **KILL** serial monitor processes before building/flashing - don't just close!
 - **Kill Processes**: `taskkill /f /im python.exe` to force kill ESP monitor processes
 - **Environment Setup**: ALWAYS use: `cd "C:\Espressif\frameworks\esp-idf-v5.5"; .\export.ps1; cd "c:\Users\dom\Documents\esp-idf-tracker"`
