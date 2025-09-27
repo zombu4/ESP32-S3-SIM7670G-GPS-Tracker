@@ -12,6 +12,8 @@
 #include "../lte/lte_module.h"
 // Include APN manager for proper APN handling
 #include "../apn/apn_manager.h"
+// Include nuclear pipeline for AT command routing
+#include "../parallel/nuclear_integration.h"
 
 static const char *TAG = "MQTT_MODULE";
 
@@ -68,25 +70,21 @@ static bool send_mqtt_at_command(const char* command, const char* expected, int 
  return false;
  }
  
- ESP_LOGI(TAG, "[MQTT] AT CMD: %s", command);
+ ESP_LOGI(TAG, "[MQTT] Nuclear AT CMD: %s", command);
  
- // Use LTE module's AT command interface for MQTT commands
- const lte_interface_t* lte = lte_get_interface();
- if (!lte || !lte->send_at_command) {
- ESP_LOGE(TAG, "[MQTT] LTE module AT interface not available");
- return false;
- }
+ // 💀🔥 USE NUCLEAR PIPELINE FOR MQTT AT COMMANDS 🔥💀
+ // CRITICAL FIX: Use nuclear_send_at_command instead of LTE module
+ // This prevents UART collisions and ensures proper command routing
+ extern bool nuclear_send_at_command(const char* command, char* response, size_t response_size, int timeout_ms);
  
- at_response_t response = {0};
+ char response_buffer[1024] = {0};
  bool success = false;
  
  if (strlen(command) > 0) {
- // AT Manual: Minimum 10ms delay between commands, use 50ms for safety
- vTaskDelay(pdMS_TO_TICKS(50));
- 
- success = lte->send_at_command(command, &response, timeout_ms);
- ESP_LOGI(TAG, "[MQTT] AT RESP: %s (success: %s)", 
- response.response, success ? "YES" : "NO");
+ // Nuclear pipeline handles timing internally - no manual delays needed
+ success = nuclear_send_at_command(command, response_buffer, sizeof(response_buffer), timeout_ms);
+ ESP_LOGI(TAG, "[MQTT] Nuclear AT RESP: %s (success: %s)", 
+ response_buffer, success ? "YES" : "NO");
  } else {
  // Empty command - typically used for data input phases
  success = true;
@@ -99,16 +97,16 @@ static bool send_mqtt_at_command(const char* command, const char* expected, int 
  
  // Enhanced response parsing for NMEA interference handling
  bool found_expected = false;
- if (strlen(response.response) > 0) {
+ if (strlen(response_buffer) > 0) {
  // First try direct match
- found_expected = (strstr(response.response, expected) != NULL);
+ found_expected = (strstr(response_buffer, expected) != NULL);
  
  // Enhanced handling for AT responses mixed with NMEA data
  if (!found_expected) {
  if (strstr(expected, "OK") != NULL) {
  // SIM7670G may return "YES" instead of "OK" for some commands - handle both
- bool found_ok = (strstr(response.response, "OK") != NULL);
- bool found_yes = (strstr(response.response, "YES") != NULL);
+ bool found_ok = (strstr(response_buffer, "OK") != NULL);
+ bool found_yes = (strstr(response_buffer, "YES") != NULL);
  
  if (found_yes) {
  found_expected = true;
@@ -120,7 +118,7 @@ static bool send_mqtt_at_command(const char* command, const char* expected, int 
  
  // Look for AT command echo followed by OK/YES pattern
  if (!found_expected) {
- const char* cmd_start = strstr(response.response, "AT+");
+ const char* cmd_start = strstr(response_buffer, "AT+");
  if (cmd_start) {
  const char* ok_pos = strstr(cmd_start, "OK");
  const char* yes_pos = strstr(cmd_start, "YES");
@@ -137,7 +135,7 @@ static bool send_mqtt_at_command(const char* command, const char* expected, int 
  
  // Fallback: Look for standalone OK/YES responses
  if (!found_expected) {
- const char* ptr = response.response;
+ const char* ptr = response_buffer;
  while (ptr != NULL) {
  // FIXED: Check for NULL before calling strstr to prevent crash
  const char* ok_ptr = strstr(ptr, "OK");
@@ -154,7 +152,7 @@ static bool send_mqtt_at_command(const char* command, const char* expected, int 
  
  // Check if OK/YES is standalone
  bool standalone = true;
- if (ptr > response.response) {
+ if (ptr > response_buffer) {
  char prev = *(ptr-1);
  if (prev != '\r' && prev != '\n' && prev != ' ') {
  standalone = false;
@@ -189,7 +187,7 @@ static bool send_mqtt_at_command(const char* command, const char* expected, int 
  while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') start++;
  
  if (strlen(start) > 0) {
- found_expected = (strstr(response.response, start) != NULL);
+ found_expected = (strstr(response_buffer, start) != NULL);
  }
  }
  }
@@ -197,7 +195,7 @@ static bool send_mqtt_at_command(const char* command, const char* expected, int 
  
  ESP_LOGI(TAG, "[MQTT] Expected '%s' found: %s", expected, found_expected ? "YES" : "NO");
  if (!found_expected) {
- ESP_LOGI(TAG, "[MQTT] Full response was: '%s'", response.response);
+ ESP_LOGI(TAG, "[MQTT] Full response was: '%s'", response_buffer);
  }
  
  return success && found_expected;

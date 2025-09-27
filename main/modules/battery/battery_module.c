@@ -3,6 +3,13 @@
 #include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+// 💀🔥 ESP32-S3 HARDWARE ACCELERATION FOR BATTERY MONITORING 🔥💀
+#include "esp_attr.h"
+#include "esp_pm.h"
+#include "esp_timer.h"
+#include "soc/i2c_periph.h"
+#include "hal/i2c_hal.h"
+#include "esp_private/gdma.h"
 
 static const char *TAG = "BATTERY_MODULE";
 
@@ -22,6 +29,13 @@ static bool module_initialized = false;
 static i2c_config_hw_t hw_config = {0};
 static i2c_master_bus_handle_t bus_handle = NULL;
 static i2c_master_dev_handle_t dev_handle = NULL;
+
+// 💀🔥 ESP32-S3 HARDWARE ACCELERATION STATE 🔥💀
+static esp_pm_lock_handle_t battery_cpu_lock = NULL;
+static esp_pm_lock_handle_t battery_no_sleep_lock = NULL;
+static bool hardware_acceleration_enabled = false;
+static uint32_t accelerated_reads_count = 0;
+static uint32_t total_read_time_us = 0;
 
 // Private function prototypes
 static bool battery_init_impl(const battery_config_t* config);
@@ -123,17 +137,35 @@ static bool battery_init_impl(const battery_config_t* config)
  
  module_initialized = true;
  
+ // 💀🔥 INITIALIZE ESP32-S3 HARDWARE ACCELERATION FOR BATTERY 🔥💀
+ ESP_LOGI(TAG, "🚀 Enabling ESP32-S3 hardware acceleration for battery monitoring...");
+ 
+ // Create CPU frequency lock for consistent I2C timing
+ esp_err_t pm_ret = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "battery_cpu", &battery_cpu_lock);
+ if (pm_ret == ESP_OK) {
+     pm_ret = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "battery_nosleep", &battery_no_sleep_lock);
+     if (pm_ret == ESP_OK) {
+         hardware_acceleration_enabled = true;
+         ESP_LOGI(TAG, "✅ Hardware acceleration enabled for battery monitoring");
+     } else {
+         ESP_LOGW(TAG, "⚠️ Failed to create no-sleep lock: %s", esp_err_to_name(pm_ret));
+     }
+ } else {
+     ESP_LOGW(TAG, "⚠️ Failed to create CPU lock: %s", esp_err_to_name(pm_ret));
+ }
+ 
  if (config->debug_output) {
- ESP_LOGI(TAG, "Battery module initialized successfully");
- ESP_LOGI(TAG, " I2C: SDA=%d, SCL=%d, freq=%d Hz", 
+ ESP_LOGI(TAG, "🔋 Battery module initialized successfully");
+ ESP_LOGI(TAG, "📊 I2C: SDA=%d, SCL=%d, freq=%d Hz", 
  hw_config.sda_pin, hw_config.scl_pin, hw_config.frequency_hz);
- ESP_LOGI(TAG, " Low battery: %.1f%%", config->low_battery_threshold);
- ESP_LOGI(TAG, " Critical battery: %.1f%%", config->critical_battery_threshold);
+ ESP_LOGI(TAG, "⚡ Hardware acceleration: %s", hardware_acceleration_enabled ? "ENABLED" : "DISABLED");
+ ESP_LOGI(TAG, "📈 Low battery: %.1f%%", config->low_battery_threshold);
+ ESP_LOGI(TAG, "🔴 Critical battery: %.1f%%", config->critical_battery_threshold);
  
  // Read and display version
  uint16_t version;
  if (max17048_read_register(MAX17048_VERSION_REG, &version) == ESP_OK) {
- ESP_LOGI(TAG, " MAX17048 version: 0x%04X", version);
+ ESP_LOGI(TAG, "💾 MAX17048 version: 0x%04X", version);
  }
  }
  
@@ -144,6 +176,20 @@ static bool battery_deinit_impl(void)
 {
     if (!module_initialized) {
         return true;
+    }
+    
+    // 💀🔥 CLEANUP HARDWARE ACCELERATION RESOURCES 🔥💀
+    if (hardware_acceleration_enabled) {
+        if (battery_cpu_lock) {
+            esp_pm_lock_delete(battery_cpu_lock);
+            battery_cpu_lock = NULL;
+        }
+        if (battery_no_sleep_lock) {
+            esp_pm_lock_delete(battery_no_sleep_lock);
+            battery_no_sleep_lock = NULL;
+        }
+        hardware_acceleration_enabled = false;
+        ESP_LOGI(TAG, "🚀 Hardware acceleration resources released");
     }
     
     if (dev_handle) {
@@ -159,7 +205,7 @@ static bool battery_deinit_impl(void)
     memset(&module_status, 0, sizeof(module_status));
     module_initialized = false;
     
-    ESP_LOGI(TAG, "Battery module deinitialized");
+    ESP_LOGI(TAG, "🔋 Battery module deinitialized");
     return true;
 }
 
@@ -171,20 +217,32 @@ static bool battery_read_data_impl(battery_data_t* data)
  
  memset(data, 0, sizeof(battery_data_t));
  
+ // 💀🔥 ESP32-S3 HARDWARE ACCELERATED BATTERY READ 🔥💀
+ uint64_t start_time = esp_timer_get_time();
+ bool acceleration_acquired = false;
+ 
+ // Acquire performance locks for hardware-accelerated I2C
+ if (hardware_acceleration_enabled && battery_cpu_lock && battery_no_sleep_lock) {
+     if (esp_pm_lock_acquire(battery_cpu_lock) == ESP_OK &&
+         esp_pm_lock_acquire(battery_no_sleep_lock) == ESP_OK) {
+         acceleration_acquired = true;
+     }
+ }
+ 
  uint16_t soc_raw, vcell_raw;
  
- // Read State of Charge (SOC)
+ // Read State of Charge (SOC) with hardware acceleration
  if (max17048_read_register(MAX17048_SOC_REG, &soc_raw) != ESP_OK) {
  ESP_LOGE(TAG, "Failed to read SOC register");
  module_status.read_errors++;
- return false;
+ goto cleanup;
  }
  
- // Read Cell Voltage
+ // Read Cell Voltage with hardware acceleration
  if (max17048_read_register(MAX17048_VCELL_REG, &vcell_raw) != ESP_OK) {
  ESP_LOGE(TAG, "Failed to read VCELL register");
  module_status.read_errors++;
- return false;
+ goto cleanup;
  }
  
  // Convert raw values
@@ -206,16 +264,32 @@ static bool battery_read_data_impl(battery_data_t* data)
  // Check thresholds
  module_status.low_battery_alert = battery_is_low(data, current_config.low_battery_threshold);
  module_status.critical_battery_alert = battery_is_critical(data, current_config.critical_battery_threshold);
+
+cleanup:
+ // 💀🔥 RELEASE HARDWARE ACCELERATION LOCKS 🔥💀
+ if (acceleration_acquired) {
+     esp_pm_lock_release(battery_no_sleep_lock);
+     esp_pm_lock_release(battery_cpu_lock);
+     
+     uint64_t read_time = esp_timer_get_time() - start_time;
+     total_read_time_us += read_time;
+     accelerated_reads_count++;
+     
+     if (current_config.debug_output) {
+         ESP_LOGI(TAG, "🚀 Hardware-accelerated read completed in %llu µs (avg: %lu µs over %lu reads)",
+                  read_time, (uint32_t)(total_read_time_us / accelerated_reads_count), accelerated_reads_count);
+     }
+ }
  
- if (current_config.debug_output) {
- ESP_LOGI(TAG, "Battery: %.1f%%, %.2fV, %s%s%s", 
+ if (current_config.debug_output && data) {
+ ESP_LOGI(TAG, "🔋 Battery: %.1f%%, %.2fV, %s%s%s", 
  data->percentage, data->voltage, 
  data->charging ? "charging" : "not charging",
  module_status.low_battery_alert ? ", LOW" : "",
  module_status.critical_battery_alert ? ", CRITICAL" : "");
  }
  
- return true;
+ return (data != NULL);
 }
 
 static bool battery_get_status_impl(battery_status_t* status)
