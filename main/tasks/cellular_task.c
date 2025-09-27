@@ -1,6 +1,7 @@
 #include "task_system.h"
 #include "modules/lte/lte_module.h"
 #include "modules/modem_init/modem_init.h"
+#include "modules/cellular_debug_ultra.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 
@@ -75,16 +76,52 @@ void cellular_task_entry(void* parameters) {
         // Get current time for this iteration
         uint32_t current_time = esp_timer_get_time() / 1000; // Convert to ms
         
+        // Update heartbeat regularly to prevent timeout warnings
+        sys->cellular_task.last_heartbeat_ms = current_time;
+        
         // Handle initialization phase
         if (!cellular_initialized) {
             ESP_LOGI(TAG, "🔧 Initializing cellular module (attempt %lu/%d)", 
                      init_retry_count + 1, MAX_INIT_RETRIES);
             
+            // ULTRA-VERBOSE DEBUG: Initialize debug system on first attempt
+            if (init_retry_count == 0) {
+                cellular_debug_init();
+                cellular_debug_log_system_state();
+            }
+            
             if (lte_if && lte_if->init) {
+                // ULTRA-VERBOSE DEBUG: Run comprehensive troubleshooting
+                ESP_LOGI(TAG, "🔍 Running cellular troubleshooting before init...");
+                cellular_troubleshoot_connection(lte_if);
+                
                 if (lte_if->init(&system_config.lte)) {
                     ESP_LOGI(TAG, "✅ Cellular module initialized successfully");
                     cellular_initialized = true;
                     init_retry_count = 0;
+                    
+                    // Update heartbeat before attempting connection
+                    sys->cellular_task.last_heartbeat_ms = current_time;
+                    
+                    // Attempt network connection after successful initialization
+                    ESP_LOGI(TAG, "🌐 Starting network connection process...");
+                    if (lte_if->connect) {
+                        ESP_LOGI(TAG, "🔄 Calling lte_if->connect() - this may take up to 30 seconds...");
+                        
+                        // Update heartbeat before long-running operation
+                        sys->cellular_task.last_heartbeat_ms = current_time;
+                        
+                        bool connection_result = lte_if->connect();
+                        
+                        // Update heartbeat after long-running operation
+                        sys->cellular_task.last_heartbeat_ms = esp_timer_get_time() / 1000;
+                        
+                        if (connection_result) {
+                            ESP_LOGI(TAG, "✅ Network connection completed successfully");
+                        } else {
+                            ESP_LOGW(TAG, "⚠️  Network connection failed or timed out");
+                        }
+                    }
                     
                     // Check if we have data connection
                     lte_status_t status = lte_if->get_connection_status();
@@ -93,20 +130,37 @@ void cellular_task_entry(void* parameters) {
                         xEventGroupSetBits(sys->system_events, EVENT_CELLULAR_READY);
                         ESP_LOGI(TAG, "🌐 Cellular data connection established");
                         sys->cellular_task.state = TASK_STATE_READY;
+                    } else {
+                        ESP_LOGW(TAG, "⚠️  Connection status: %d (not connected)", status);
+                        ESP_LOGI(TAG, "🔄 Will retry connection in next loop iteration");
                     }
                 } else {
                     init_retry_count++;
                     ESP_LOGW(TAG, "⚠️  Cellular initialization failed, retry %lu/%d", 
                              init_retry_count, MAX_INIT_RETRIES);
                     
+                    // ULTRA-VERBOSE DEBUG: Run detailed diagnostics on failure
+                    ESP_LOGE(TAG, "🔍 INITIALIZATION FAILED - Running detailed diagnostics...");
+                    cellular_troubleshoot_connection(lte_if);
+                    cellular_debug_log_system_state();
+                    
                     if (init_retry_count >= MAX_INIT_RETRIES) {
                         ESP_LOGE(TAG, "❌ Cellular initialization failed after %d retries", MAX_INIT_RETRIES);
+                        ESP_LOGE(TAG, "🔥 COMPREHENSIVE FAILURE ANALYSIS:");
+                        
+                        cellular_diagnostic_t final_diagnostic = {0};
+                        cellular_run_hardware_diagnostic(&final_diagnostic);
+                        cellular_run_sim_diagnostic(lte_if, &final_diagnostic);  
+                        cellular_run_network_diagnostic(lte_if, &final_diagnostic);
+                        cellular_generate_diagnostic_report(&final_diagnostic);
+                        
                         sys->cellular_task.state = TASK_STATE_ERROR;
                         sys->cellular_error_count++;
                         init_retry_count = 0; // Reset for next attempt cycle
                     }
                     
-                    vTaskDelay(pdMS_TO_TICKS(5000)); // Wait before retry
+                    ESP_LOGI(TAG, "⏳ Waiting 10 seconds before retry (extended for troubleshooting)...");
+                    vTaskDelay(pdMS_TO_TICKS(10000)); // Extended wait for troubleshooting
                 }
             }
         }
@@ -114,6 +168,9 @@ void cellular_task_entry(void* parameters) {
         // Handle connection monitoring
         else if (cellular_initialized && (current_time - last_health_check) >= HEALTH_CHECK_INTERVAL) {
             last_health_check = current_time;
+            
+            // Update heartbeat during monitoring 
+            sys->cellular_task.last_heartbeat_ms = current_time;
             
             if (lte_if && lte_if->get_connection_status) {
                 lte_status_t current_status = lte_if->get_connection_status();
@@ -139,7 +196,31 @@ void cellular_task_entry(void* parameters) {
                     // Attempt to reconnect
                     if (lte_if->connect) {
                         ESP_LOGI(TAG, "🔄 Attempting to reconnect cellular...");
+                        
+                        // Update heartbeat before connection attempt
+                        sys->cellular_task.last_heartbeat_ms = current_time;
                         lte_if->connect();
+                        // Update heartbeat after connection attempt
+                        sys->cellular_task.last_heartbeat_ms = esp_timer_get_time() / 1000;
+                    }
+                    
+                } else if (!currently_connected && !cellular_connected) {
+                    // Module initialized but never connected - attempt first connection
+                    ESP_LOGI(TAG, "🔄 Module initialized but not connected, attempting connection...");
+                    if (lte_if->connect) {
+                        // Update heartbeat before connection attempt
+                        sys->cellular_task.last_heartbeat_ms = current_time;
+                        
+                        bool connection_result = lte_if->connect();
+                        
+                        // Update heartbeat after connection attempt  
+                        sys->cellular_task.last_heartbeat_ms = esp_timer_get_time() / 1000;
+                        
+                        if (connection_result) {
+                            ESP_LOGI(TAG, "✅ Connection attempt completed");
+                        } else {
+                            ESP_LOGW(TAG, "⚠️  Connection attempt failed, will retry");
+                        }
                     }
                 }
             }

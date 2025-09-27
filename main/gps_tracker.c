@@ -22,14 +22,24 @@
 #include "modules/mqtt/mqtt_module.h"
 #include "modules/battery/battery_module.h"
 #include "modules/modem_init/modem_init.h"
+#include "modules/parallel/nuclear_startup.h"
 #include "baud_rate_tester.h"
 
 // External function declarations for MQTT JSON payload creation
 extern bool mqtt_create_json_payload(const char* latitude, const char* longitude, 
  float battery_voltage, int battery_percentage,
  char* json_buffer, size_t buffer_size);
+
+// Performance demo declaration
+extern void performance_demo_simple(void);
 extern bool mqtt_create_enhanced_json_payload(const gps_data_t* gps_data, const battery_data_t* battery_data,
  bool fresh_gps_data, char* json_buffer, size_t buffer_size);
+
+// Revolutionary ETM+GDMA test declaration
+extern esp_err_t run_etm_gdma_revolutionary_test(void);
+
+// Hardcore performance arsenal declaration
+extern esp_err_t run_hardcore_performance_demo(void);
 
 static const char *TAG = "GPS_TRACKER";
 
@@ -179,6 +189,45 @@ void app_main(void)
  }
  ESP_LOGI(TAG, "✅ NVS flash initialized successfully");
  
+ // ========= ESP32-S3 PERFORMANCE DEMONSTRATION =========
+ ESP_LOGI(TAG, "🚀 Running ESP32-S3 Performance Demonstration");
+ performance_demo_simple();
+ ESP_LOGI(TAG, "✅ Performance demonstration completed");
+ 
+ // ========= ESP32-S3 REVOLUTIONARY ETM+GDMA TEST =========
+ ESP_LOGI(TAG, "🚀 Running ESP32-S3 Revolutionary ETM+GDMA Test");
+ esp_err_t etm_gdma_result = run_etm_gdma_revolutionary_test();
+ if (etm_gdma_result == ESP_OK) {
+     ESP_LOGI(TAG, "🔥 REVOLUTIONARY PARALLEL PROCESSING: **OPERATIONAL**");
+ } else {
+     ESP_LOGW(TAG, "⚠️  ETM+GDMA test completed with warnings");
+ }
+ 
+ // ========= ESP32-S3 HARDCORE PERFORMANCE ARSENAL =========
+ ESP_LOGI(TAG, "💀 Running ESP32-S3 Hardcore Performance Arsenal");
+ esp_err_t hardcore_result = run_hardcore_performance_demo();
+ if (hardcore_result == ESP_OK) {
+     ESP_LOGI(TAG, "💀🔥 HARDCORE NUCLEAR ARSENAL: **FULLY ARMED**");
+ } else {
+     ESP_LOGW(TAG, "⚠️  Hardcore performance demo completed with warnings");
+ }
+ 
+ // ========= 💀🔥 NUCLEAR GDMA+ETM PIPELINE ACTIVATION 🔥💀 =========
+ ESP_LOGI(TAG, "💀🔥 INITIALIZING NUCLEAR GDMA+ETM PIPELINE SYSTEM 🔥💀");
+ 
+ nuclear_startup_config_t nuclear_config = {
+     .enable_nuclear_pipeline = true,
+     .enable_debug_logging = true, 
+     .enable_performance_monitoring = true
+ };
+ 
+ esp_err_t nuclear_result = nuclear_startup_init(&nuclear_config);
+ if (nuclear_result == ESP_OK) {
+     ESP_LOGI(TAG, "💀🔥 NUCLEAR PIPELINE SYSTEM: **INITIALIZED** 🔥💀");
+ } else {
+     ESP_LOGW(TAG, "⚠️  Nuclear pipeline initialization failed, continuing with legacy mode");
+ }
+ 
  // Load system configuration
  if (!config_load_from_nvs(&system_config)) {
      ESP_LOGW(TAG, "Failed to load config from NVS, using defaults");
@@ -244,6 +293,18 @@ void app_main(void)
      return;
  }
  ESP_LOGI(TAG, "✅ STEP 5 COMPLETE: All system tasks started successfully");
+ 
+ // ========= 💀🔥 NUCLEAR PIPELINE ACTIVATION 🔥💀 =========
+ if (nuclear_result == ESP_OK) {
+     ESP_LOGI(TAG, "🔧 STEP 6: Activating Nuclear GDMA+ETM Pipeline...");
+     esp_err_t nuclear_start = nuclear_startup_begin();
+     if (nuclear_start == ESP_OK) {
+         ESP_LOGI(TAG, "✅ STEP 6 COMPLETE: 💀🔥 NUCLEAR PIPELINE ACTIVE - PARALLEL PROCESSING ENGAGED! 🔥💀");
+         ESP_LOGI(TAG, "🚀 Cellular + GPS simultaneous operation enabled via GDMA+ETM");
+     } else {
+         ESP_LOGW(TAG, "⚠️  Nuclear pipeline activation failed, using legacy mode");
+     }
+ }
  
  ESP_LOGI(TAG, "🎉 Task System Architecture Activated!");
  ESP_LOGI(TAG, "📱 Cellular Task: Managing network connectivity");

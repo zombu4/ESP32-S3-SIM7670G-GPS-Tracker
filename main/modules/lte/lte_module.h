@@ -88,3 +88,9 @@ void lte_show_debug_status(void); // Show current debug status
 
 // UART troubleshooting helpers
 void lte_log_uart_config(int tx_pin, int rx_pin); // Log current UART pin config with swap suggestions
+
+/**
+ * Check if LTE module is busy with network operations
+ * @return true if busy (connecting, registering, etc.), false if idle
+ */
+bool lte_is_busy_with_network_operations(void);

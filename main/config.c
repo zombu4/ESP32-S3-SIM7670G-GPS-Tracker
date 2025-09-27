@@ -44,8 +44,8 @@ static tracker_system_config_t default_config = {
  .fix_timeout_ms = 60000,
  .min_satellites = 3, // Lowered from 4 to 3 for better fix chances
  .data_update_interval_ms = 30000, // 30-second polling
- .debug_nmea = false,
- .debug_output = false // Reduce verbose output
+ .debug_nmea = true,
+ .debug_output = true // Enable verbose output for troubleshooting
  },
  
  // LTE Module Configuration
@@ -62,8 +62,8 @@ static tracker_system_config_t default_config = {
 #endif
  .network_timeout_ms = 30000,
  .max_retries = 5,
- .debug_at_commands = false, // Reduce AT command chatter
- .debug_output = false // Reduce verbose output
+ .debug_at_commands = true, // Enable AT command debugging
+ .debug_output = true // Enable verbose output for troubleshooting
  },
  
  // MQTT Module Configuration
@@ -90,7 +90,7 @@ static tracker_system_config_t default_config = {
  .qos_level = 0,
  .max_retries = 3,
  .retain_messages = false,
- .debug_output = false // Reduce verbose output
+ .debug_output = true // Enable verbose output for troubleshooting
  },
  
  // Battery Module Configuration
@@ -100,7 +100,7 @@ static tracker_system_config_t default_config = {
  .critical_battery_threshold = 5.0f,
  .read_interval_ms = 10000,
  .enable_charging_detection = true,
- .debug_output = false // Reduce verbose output
+ .debug_output = true // Enable verbose output for troubleshooting
  },
  
  // System Configuration
@@ -112,7 +112,7 @@ static tracker_system_config_t default_config = {
  .enable_watchdog = true,
  .enable_deep_sleep = false,
  .deep_sleep_duration_ms = 300000, // 5 minutes
- .debug_system = false // Reduce verbose output
+ .debug_system = true // Enable verbose output for troubleshooting
  }
 };
 

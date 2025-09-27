@@ -186,11 +186,15 @@ static bool lte_init_impl(const lte_config_t* config)
  return false;
  }
  
- // Install UART driver with 4KB buffer (matching GPS buffer requirement)
+ // Install UART driver with 4KB buffer (nuclear pipeline may have already installed)
  ret = uart_driver_install(UART_NUM_1, 4096, 4096, 0, NULL, 0);
- if (ret != ESP_OK) {
- ESP_LOGE(TAG, "Failed to install UART driver: %s", esp_err_to_name(ret));
- return false;
+ if (ret == ESP_FAIL) {
+     ESP_LOGW(TAG, "UART driver already installed (nuclear pipeline active) - using existing driver");
+     // UART already installed by nuclear pipeline - continue with existing driver
+     ret = ESP_OK;
+ } else if (ret != ESP_OK) {
+     ESP_LOGE(TAG, "Failed to install UART driver: %s", esp_err_to_name(ret));
+     return false;
  }
  
  LTE_DEBUG_PINS(18, 17); // Log successful UART initialization (TX=18, RX=17 - CORRECTED!)
@@ -458,19 +462,62 @@ static bool lte_send_at_command_impl(const char* command, at_response_t* respons
  // Clear response
  memset(response, 0, sizeof(at_response_t));
  
- // Send AT command directly via UART
- char local_response[256] = {0};
+ // 💀🔥 NUCLEAR PIPELINE INTEGRATION FIX 🔥💀
+ // Check if nuclear pipeline is active and route commands accordingly
+ extern bool nuclear_integration_is_active(void);
+ extern bool nuclear_send_at_command(const char* command, char* response, size_t response_size, int timeout_ms);
  
- // Send command
- uart_write_bytes(UART_NUM_1, command, strlen(command));
- uart_write_bytes(UART_NUM_1, "\r\n", 2);
+ char local_response[512] = {0};
+ bool command_success = false;
  
- // Read response
- int bytes_read = uart_read_bytes(UART_NUM_1, local_response, sizeof(local_response) - 1, pdMS_TO_TICKS(timeout_ms));
+ if (nuclear_integration_is_active()) {
+     ESP_LOGW(TAG, "🔥 Nuclear pipeline active - routing cellular AT command: %s", command);
+     
+     // Route through nuclear pipeline for cellular commands
+     if (strstr(command, "AT+CFUN") != NULL ||     // Full functionality
+         strstr(command, "AT+CPIN") != NULL ||     // SIM PIN check
+         strstr(command, "AT+CSQ") != NULL ||      // Signal quality
+         strstr(command, "AT+CREG") != NULL ||     // Network registration
+         strstr(command, "AT+COPS") != NULL ||     // Operator selection
+         strstr(command, "AT+CGACT") != NULL ||    // Activate PDP context
+         strstr(command, "AT+CGATT") != NULL ||    // Attach to network
+         strstr(command, "AT+CGDCONT") != NULL ||  // Define PDP context
+         strcmp(command, "AT") == 0) {             // Basic AT test
+         
+         // Use nuclear pipeline for these cellular commands
+         command_success = nuclear_send_at_command(command, local_response, sizeof(local_response), timeout_ms);
+         ESP_LOGI(TAG, "🔥 Nuclear cellular command result: %s -> %s", 
+                  command, command_success ? "SUCCESS" : "FAILED");
+     } else {
+         // For other commands, fall back to direct UART (with reduced timeout to prevent conflicts)
+         ESP_LOGW(TAG, "🔥 Using direct UART for command: %s", command);
+         uart_write_bytes(UART_NUM_1, command, strlen(command));
+         uart_write_bytes(UART_NUM_1, "\r\n", 2);
+         int bytes_read = uart_read_bytes(UART_NUM_1, local_response, sizeof(local_response) - 1, 
+                                        pdMS_TO_TICKS(timeout_ms < 1000 ? timeout_ms : 1000)); // Reduced timeout
+         command_success = (bytes_read > 0);
+         if (bytes_read > 0) {
+             local_response[bytes_read] = '\0';
+         }
+     }
+ } else {
+     // Original direct UART implementation when nuclear pipeline not active
+     uart_write_bytes(UART_NUM_1, command, strlen(command));
+     uart_write_bytes(UART_NUM_1, "\r\n", 2);
+     
+     int bytes_read = uart_read_bytes(UART_NUM_1, local_response, sizeof(local_response) - 1, 
+                                    pdMS_TO_TICKS(timeout_ms < 2000 ? timeout_ms : 2000));
+     command_success = (bytes_read > 0);
+     if (bytes_read > 0) {
+         local_response[bytes_read] = '\0';
+     }
+ }
+ 
+ // Reset watchdog after UART operations (prevents task watchdog timeout)
+ esp_task_wdt_reset();
  
  // Copy response to at_response_t structure
- if (bytes_read > 0) {
-     local_response[bytes_read] = '\0';
+ if (command_success && strlen(local_response) > 0) {
      strncpy(response->response, local_response, 511);
      response->response[511] = '\0';
      response->success = true;
@@ -885,4 +932,14 @@ bool lte_format_network_info(const lte_network_info_t* info, char* buffer, size_
  snprintf(buffer, buffer_size, "Operator: %s, Signal: %d dBm, Quality: %d",
  info->operator_name, info->signal_strength, info->signal_quality);
  return true;
+}
+
+bool lte_is_busy_with_network_operations(void)
+{
+    // Check if LTE is currently performing network operations
+    // This prevents GPS polling conflicts during cellular operations
+    lte_status_t status = module_status.connection_status;
+    
+    return (status == LTE_STATUS_CONNECTING || 
+            status == LTE_STATUS_ERROR);
 }

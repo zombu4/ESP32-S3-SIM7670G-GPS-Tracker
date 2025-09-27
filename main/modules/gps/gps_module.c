@@ -7,8 +7,11 @@
 #include "string.h"
 #include "stdlib.h"
 #include "math.h"
+#include "time.h"
 // Include LTE module for shared AT interface
 #include "../lte/lte_module.h"
+// Include nuclear integration check
+#include "../parallel/nuclear_integration.h"
 
 static const char *TAG = "GPS_MODULE";
 
@@ -57,6 +60,7 @@ static bool parse_nmea_coordinate(const char* coord_str, char dir, float* result
 static bool parse_gnrmc(const char* sentence, gps_data_t* data);
 static bool parse_gngga(const char* sentence, gps_data_t* data);
 static bool parse_gpgsv(const char* sentence, gps_data_t* data);
+static bool parse_cgnsinf_response(const char* response, gps_data_t* data);
 static bool validate_nmea_checksum(const char* sentence);
 
 // GPS interface implementation
@@ -221,8 +225,8 @@ static bool gps_init_impl(const gps_config_t* config)
  return false;
  }
  
- // NO auto data output - polling only mode to avoid UART collisions
- ESP_LOGI(TAG, " GNSS enabled for POLLING ONLY - no auto output to prevent collisions");
+ // Active polling mode - GPS data acquired via AT+CGNSINF on demand
+ ESP_LOGI(TAG, " GNSS enabled for active polling - data acquired via AT+CGNSINF");
  
  if (config->debug_output) {
  ESP_LOGI(TAG, "GPS module initialized successfully with AT commands");
@@ -262,14 +266,24 @@ static bool gps_read_data_impl(gps_data_t* data)
  return false;
  }
  
- // Use LTE module's AT interface to access preserved NMEA data and polling
+ // CRITICAL FIX: Check if cellular task is busy - avoid UART conflicts
  const lte_interface_t* lte = lte_get_interface();
  if (!lte || !lte->send_at_command) {
  ESP_LOGE(TAG, "LTE module AT interface not available");
  return false;
  }
  
- char* buffer = malloc(4096); // Larger buffer for preserved NMEA data
+ // Check if LTE/cellular is currently busy with network operations
+ // If cellular is connecting, skip GPS polling to avoid UART corruption
+ extern bool lte_is_busy_with_network_operations(void);
+ if (lte_is_busy_with_network_operations()) {
+ if (current_config.debug_output) {
+ ESP_LOGD(TAG, "Skipping GPS polling - cellular task active");
+ }
+ return false;
+ }
+ 
+ char* buffer = malloc(4096); // Buffer for NMEA polling response
  if (!buffer) {
  ESP_LOGE(TAG, "Failed to allocate read buffer");
  return false;
@@ -278,29 +292,40 @@ static bool gps_read_data_impl(gps_data_t* data)
  // Clear data structure
  memset(data, 0, sizeof(gps_data_t));
  
- // Get NMEA data from ring buffer (filled by UART streaming)
- // NOTE: We're called while UART mutex is held, so we can't make AT commands
- size_t bytes_read = ring_buffer_read(buffer, 4095);
- bool has_data = false;
+ // Use AT+CGNSINF for active NMEA data polling (only when cellular is idle)
+ bool success = send_gps_at_command("AT+CGNSINF", buffer, 4095, 3000); // Shorter timeout
  
- if (bytes_read > 0) {
- buffer[bytes_read] = '\0';
- has_data = true;
+ if (!success) {
  if (current_config.debug_output) {
- ESP_LOGD(TAG, "Read %zu bytes of NMEA data from ring buffer", bytes_read);
- }
- }
- 
- // If no data available, return false (don't try AT commands while mutex held)
- if (!has_data) {
- if (current_config.debug_output) {
- ESP_LOGW(TAG, "No NMEA data available in ring buffer");
+ ESP_LOGW(TAG, "Failed to poll NMEA data with AT+CGNSINF");
  }
  free(buffer);
  return false;
  }
  
- // Parse NMEA sentences (either from preserved data or polling)
+ // Parse AT+CGNSINF response - format: +CGNSINF: run,fix,utc,lat,lon,alt,speed,course,fixmode,reserved1,hdop,pdop,vdop,reserved2,view,used,reserved3
+ if (current_config.debug_output) {
+ ESP_LOGD(TAG, "CGNSINF Response: %s", buffer);
+ }
+ 
+ // Parse CGNSINF structured response (not NMEA)
+ char* cgnsinf_line = strstr(buffer, "+CGNSINF:");
+ if (cgnsinf_line) {
+ if (parse_cgnsinf_response(cgnsinf_line, data)) {
+ module_status.valid_sentences++;
+ if (current_config.debug_output) {
+ ESP_LOGI(TAG, "GPS Status: Fix=%s, Sats=%d, Lat=%.6f, Lon=%.6f, Speed=%.1f km/h", 
+ data->fix_valid ? "YES" : "NO", data->satellites,
+ data->latitude, data->longitude, data->speed_kmh);
+ }
+ free(buffer);
+ return data->fix_valid; // Return true if we have a valid GPS fix
+ } else {
+ module_status.parse_errors++;
+ }
+ }
+ 
+ // Fallback: try parsing as NMEA sentences (for compatibility)
  module_status.total_sentences_parsed++;
  
  char* line = strtok(buffer, "\r\n");
@@ -678,6 +703,64 @@ static bool parse_gpgsv(const char* sentence, gps_data_t* data)
  return false;
 }
 
+// Parse AT+CGNSINF response: +CGNSINF: run,fix,utc,lat,lon,alt,speed,course,fixmode,reserved1,hdop,pdop,vdop,reserved2,view,used,reserved3
+static bool parse_cgnsinf_response(const char* response, gps_data_t* data)
+{
+ if (!response || !data) {
+ return false;
+ }
+ 
+ // Find the +CGNSINF: prefix
+ const char* start = strstr(response, "+CGNSINF:");
+ if (!start) {
+ return false;
+ }
+ 
+ // Move past "+CGNSINF: "
+ start += 10;
+ 
+ // Parse comma-separated values
+ // Format: run,fix,utc,lat,lon,alt,speed,course,fixmode,reserved1,hdop,pdop,vdop,reserved2,view,used,reserved3
+ int run_status, fix_status, fixmode, satellites_view, satellites_used;
+ char utc_time[32];
+ float latitude, longitude, altitude, speed, course, hdop, pdop, vdop;
+ 
+ int parsed = sscanf(start, "%d,%d,%31[^,],%f,%f,%f,%f,%f,%d,%*[^,],%f,%f,%f,%*[^,],%d,%d",
+ &run_status, &fix_status, utc_time, &latitude, &longitude, &altitude, 
+ &speed, &course, &fixmode, &hdop, &pdop, &vdop, &satellites_view, &satellites_used);
+ 
+ if (parsed >= 6) { // At least need run, fix, utc, lat, lon, alt
+ data->fix_valid = (fix_status == 1); // 1 = GPS fix available
+ data->latitude = latitude;
+ data->longitude = longitude;
+ data->altitude = altitude;
+ data->speed_kmh = speed * 3.6f; // Convert m/s to km/h
+ data->course = course; // Use correct field name
+ data->hdop = hdop;
+ // Note: pdop and vdop not available in gps_data_t structure
+ data->satellites = satellites_used > 0 ? satellites_used : satellites_view;
+ 
+ // Parse timestamp if available
+ if (strlen(utc_time) > 10) {
+ // UTC time format: yyyymmddhhmmss.sss - copy to timestamp array
+ if (strlen(utc_time) >= 14) {
+ strncpy(data->timestamp, utc_time, sizeof(data->timestamp) - 1);
+ data->timestamp[sizeof(data->timestamp) - 1] = '\0';
+ }
+ }
+ 
+ if (current_config.debug_output) {
+ ESP_LOGI(TAG, "[CGNSINF] Fix=%s, Sats=%d/%d, Lat=%.6f, Lon=%.6f, HDOP=%.1f", 
+ data->fix_valid ? "YES" : "NO", satellites_used, satellites_view,
+ data->latitude, data->longitude, data->hdop);
+ }
+ 
+ return true;
+ }
+ 
+ return false;
+}
+
 // Utility functions
 bool gps_is_fix_valid(const gps_data_t* data)
 {
@@ -713,6 +796,12 @@ static bool send_gps_at_command(const char* command, char* response, size_t resp
 {
  if (!module_initialized || !command) {
  return false;
+ }
+ 
+ // Check if nuclear pipeline is active - if so, use nuclear AT command interface
+ if (nuclear_integration_is_active()) {
+     ESP_LOGW(TAG, "Nuclear pipeline active - using nuclear AT command interface");
+     return nuclear_send_at_command(command, response, response_size, timeout_ms);
  }
  
  if (current_config.debug_output) {
@@ -767,7 +856,12 @@ static bool gps_enable_gnss(void)
  ESP_LOGI(TAG, "GNSS power enabled successfully");
  }
  
+ if (current_config.debug_output) {
+ ESP_LOGI(TAG, "GNSS enabled for active polling with AT+CGNSINF");
+ }
+ 
  module_status.gnss_enabled = true;
+ module_status.data_output_enabled = true;
  return true;
 }
 
