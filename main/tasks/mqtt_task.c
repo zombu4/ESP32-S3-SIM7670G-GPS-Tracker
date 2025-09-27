@@ -39,7 +39,8 @@ void mqtt_task_entry(void* parameters) {
         uint32_t current_time = get_current_timestamp_ms();
         
         // Verify prerequisites are still met
-        EventBits_t required_bits = EVENT_CELLULAR_READY | EVENT_GPS_FIX_ACQUIRED;
+        // MQTT only requires cellular connection, GPS fix is optional for basic operation
+        EventBits_t required_bits = EVENT_CELLULAR_READY;
         EventBits_t current_bits = xEventGroupWaitBits(
             sys->system_events,
             required_bits,

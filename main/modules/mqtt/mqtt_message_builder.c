@@ -13,8 +13,14 @@
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
+#include <inttypes.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "MQTT_MSG_BUILDER";
+
+// 📨 FORWARD DECLARATIONS 📨
+static bool mqtt_get_timestamp_string_impl(char* timestamp_buffer, size_t buffer_size);
 
 // 📨 INTERNAL STATE 📨
 
@@ -187,8 +193,8 @@ static bool mqtt_build_tracking_message_impl(
         if (options->pretty_format) {
             written = snprintf(message_buffer + pos, buffer_size - pos,
                 "  \"system\": {\n"
-                "    \"uptime\": %u,\n"
-                "    \"free_heap\": %u,\n"
+                "    \"uptime\": %" PRIu32 ",\n"
+                "    \"free_heap\": %" PRIu32 ",\n"
                 "    \"rssi\": %d,\n"
                 "    \"firmware\": \"%s\",\n"
                 "    \"device_id\": \"%s\"\n"
@@ -200,7 +206,7 @@ static bool mqtt_build_tracking_message_impl(
                 system_data->device_id ? system_data->device_id : "esp32_gps_tracker");
         } else {
             written = snprintf(message_buffer + pos, buffer_size - pos,
-                "\"system\":{\"uptime\":%u,\"heap\":%u,\"rssi\":%d,\"fw\":\"%s\",\"id\":\"%s\"}",
+                "\"system\":{\"uptime\":%" PRIu32 ",\"heap\":%" PRIu32 ",\"rssi\":%d,\"fw\":\"%s\",\"id\":\"%s\"}",
                 system_data->uptime_seconds,
                 system_data->free_heap,
                 system_data->rssi,
@@ -328,7 +334,7 @@ static bool mqtt_get_timestamp_string_impl(char* timestamp_buffer, size_t buffer
     if (gettimeofday(&tv, NULL) != 0) {
         // Fallback to system tick count
         uint32_t ticks = xTaskGetTickCount() * portTICK_PERIOD_MS;
-        snprintf(timestamp_buffer, buffer_size, "%u", ticks);
+        snprintf(timestamp_buffer, buffer_size, "%" PRIu32, ticks);
         return true;
     }
     
@@ -406,7 +412,7 @@ static void mqtt_get_debug_info_impl(char* debug_str, size_t max_len)
     if (!debug_str) return;
     
     snprintf(debug_str, max_len,
-        "MSG_BUILDER: built=%u, errors=%u, last_size=%zu, gps=%s, battery=%s, system=%s",
+        "MSG_BUILDER: built=%" PRIu32 ", errors=%" PRIu32 ", last_size=%zu, gps=%s, battery=%s, system=%s",
         g_builder_stats.messages_built,
         g_builder_stats.build_errors,
         g_builder_stats.last_message_size,

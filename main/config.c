@@ -62,8 +62,8 @@ static tracker_system_config_t default_config = {
 #endif
  .network_timeout_ms = 30000,
  .max_retries = 5,
- .debug_at_commands = true, // Enable AT command debugging
- .debug_output = true // Enable verbose output for troubleshooting
+ .debug_at_commands = false, // Reduce AT command debugging
+ .debug_output = false // Reduce verbose output - only show errors
  },
  
  // MQTT Module Configuration
@@ -90,7 +90,7 @@ static tracker_system_config_t default_config = {
  .qos_level = 0,
  .max_retries = 3,
  .retain_messages = false,
- .debug_output = true // Enable verbose output for troubleshooting
+ .debug_output = false // Reduce verbose output - only show MQTT errors
  },
  
  // Battery Module Configuration

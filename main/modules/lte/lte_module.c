@@ -186,15 +186,18 @@ static bool lte_init_impl(const lte_config_t* config)
  return false;
  }
  
- // Install UART driver with 4KB buffer (nuclear pipeline may have already installed)
- ret = uart_driver_install(UART_NUM_1, 4096, 4096, 0, NULL, 0);
- if (ret == ESP_FAIL) {
-     ESP_LOGW(TAG, "UART driver already installed (nuclear pipeline active) - using existing driver");
-     // UART already installed by nuclear pipeline - continue with existing driver
+ // Check if UART driver is already installed (nuclear pipeline installs it first)
+ if (!uart_is_driver_installed(UART_NUM_1)) {
+     // Install UART driver with 4KB buffer
+     ret = uart_driver_install(UART_NUM_1, 4096, 4096, 0, NULL, 0);
+     if (ret != ESP_OK) {
+         ESP_LOGE(TAG, "Failed to install UART driver: %s", esp_err_to_name(ret));
+         return false;
+     }
+     ESP_LOGI(TAG, "UART driver installed successfully");
+ } else {
+     ESP_LOGI(TAG, "UART driver already installed (nuclear pipeline active) - using existing driver");
      ret = ESP_OK;
- } else if (ret != ESP_OK) {
-     ESP_LOGE(TAG, "Failed to install UART driver: %s", esp_err_to_name(ret));
-     return false;
  }
  
  LTE_DEBUG_PINS(18, 17); // Log successful UART initialization (TX=18, RX=17 - CORRECTED!)
@@ -491,11 +494,12 @@ static bool lte_send_at_command_impl(const char* command, at_response_t* respons
          
          // Use nuclear pipeline for these cellular commands
          command_success = nuclear_send_at_command(command, local_response, sizeof(local_response), timeout_ms);
-         ESP_LOGI(TAG, "🔥 Nuclear cellular command result: %s -> %s", 
-                  command, command_success ? "SUCCESS" : "FAILED");
+         if (!command_success) {
+             ESP_LOGW(TAG, "🔥 Nuclear cellular command failed: %s", command);
+         }
      } else {
          // For other commands, fall back to direct UART (with reduced timeout to prevent conflicts)
-         ESP_LOGW(TAG, "🔥 Using direct UART for command: %s", command);
+         ESP_LOGD(TAG, "🔥 Using direct UART for command: %s", command);
          uart_write_bytes(UART_NUM_1, command, strlen(command));
          uart_write_bytes(UART_NUM_1, "\r\n", 2);
          int bytes_read = uart_read_bytes(UART_NUM_1, local_response, sizeof(local_response) - 1, 

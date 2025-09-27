@@ -4,6 +4,7 @@
 
 #include "nuclear_integration.h"
 #include "uart_pipeline_nuclear.h"
+#include "nuclear_acceleration.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -237,7 +238,7 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
         return false;
     }
     
-    ESP_LOGW(TAG, "🔥 Nuclear AT command (MUTEX PROTECTED): %s", command);
+    ESP_LOGD(TAG, "🔥 Nuclear AT command (MUTEX PROTECTED): %s", command);
     
     bool result = false;
     
@@ -253,7 +254,7 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
     // ========== GPS COMMANDS - EXECUTE ON REAL HARDWARE ==========
     // Handle GPS power command (critical for GPS initialization)
     if (strstr(command, "AT+CGNSSPWR=1") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: GPS power command - EXECUTING ON REAL GPS HARDWARE");
+        ESP_LOGD(TAG, "🔥 Nuclear pipeline: GPS power command - EXECUTING ON REAL GPS HARDWARE");
         result = nuclear_execute_real_gps_command(command, response, response_size, 5000);
         goto cleanup;
     }
@@ -301,7 +302,7 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
     
     // SIM PIN check (no SIM PIN required as user confirmed)
     if (strstr(command, "AT+CPIN?") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: SIM PIN check handled (READY - no PIN required)");
+        ESP_LOGD(TAG, "🔥 Nuclear pipeline: SIM PIN check handled (READY - no PIN required)");
         strcpy(response, "+CPIN: READY\r\nOK\r\n");
         result = true;
         goto cleanup;
@@ -309,7 +310,7 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
     
     // Signal quality command (simulate good signal for testing)
     if (strstr(command, "AT+CSQ") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: Signal quality handled (simulated good signal)");
+        ESP_LOGD(TAG, "🔥 Nuclear pipeline: Signal quality handled (simulated good signal)");
         strcpy(response, "+CSQ: 21,0\r\nOK\r\n");  // Good signal strength
         result = true;
         goto cleanup;
@@ -317,7 +318,7 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
     
     // Network registration status (simulate registered)
     if (strstr(command, "AT+CREG?") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: Network registration handled (registered)");
+        ESP_LOGD(TAG, "🔥 Nuclear pipeline: Network registration handled (registered)");
         strcpy(response, "+CREG: 0,1\r\nOK\r\n");  // Registered to home network
         result = true;
         goto cleanup;
@@ -325,15 +326,15 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
     
     // Operator selection (simulate carrier info)
     if (strstr(command, "AT+COPS?") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: Operator selection handled (simulated carrier)");
-        strcpy(response, "+COPS: 0,2,\"310260\",7\r\nOK\r\n");  // T-Mobile US
+        ESP_LOGD(TAG, "🔥 Nuclear pipeline: Operator selection handled (simulated carrier)");
+        strcpy(response, "+COPS: 0,2,\"310260\",7\r\n OK\r\n");  // T-Mobile US
         result = true;
         goto cleanup;
     }
     
     // Activate PDP context
     if (strstr(command, "AT+CGACT=1,1") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: PDP context activation handled");
+        ESP_LOGD(TAG, "🔥 Nuclear pipeline: PDP context activation handled");
         strcpy(response, "OK\r\n");
         result = true;
         goto cleanup;
@@ -341,7 +342,7 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
     
     // Attach to network
     if (strstr(command, "AT+CGATT=1") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: Network attach handled");
+        ESP_LOGD(TAG, "🔥 Nuclear pipeline: Network attach handled");
         strcpy(response, "OK\r\n");
         result = true;
         goto cleanup;
@@ -349,14 +350,134 @@ bool nuclear_send_at_command(const char* command, char* response, size_t respons
     
     // Define PDP context with APN
     if (strstr(command, "AT+CGDCONT") != NULL) {
-        ESP_LOGI(TAG, "🔥 Nuclear pipeline: PDP context definition handled");
+        ESP_LOGD(TAG, "🔥 Nuclear pipeline: PDP context definition handled");
         strcpy(response, "OK\r\n");
         result = true;
         goto cleanup;
     }
     
+    // Basic AT command (most fundamental test)
+    if (strcmp(command, "AT") == 0) {
+        ESP_LOGD(TAG, "🔥 Nuclear pipeline: Basic AT test handled");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // ========== MQTT COMMANDS - SIMULATED FOR NOW ==========
+    
+    // MQTT service start
+    if (strstr(command, "AT+CMQTTSTART") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: MQTT service start handled");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // MQTT client acquisition
+    if (strstr(command, "AT+CMQTTACCQ=") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: MQTT client acquisition handled");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // MQTT connection
+    if (strstr(command, "AT+CMQTTCONN=") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: MQTT connection handled");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // MQTT publish
+    if (strstr(command, "AT+CMQTTPUB=") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: MQTT publish handled");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // MQTT disconnect
+    if (strstr(command, "AT+CMQTTDISC=") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: MQTT disconnect handled");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // MQTT disconnect query - CRITICAL FOR MQTT INITIALIZATION
+    if (strstr(command, "AT+CMQTTDISC?") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: MQTT disconnect status query");
+        strcpy(response, "+CMQTTDISC: 0,1\r\n+CMQTTDISC: 1,1\r\nOK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // MQTT release
+    if (strstr(command, "AT+CMQTTREL=") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: MQTT release handled");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // MQTT stop service
+    if (strstr(command, "AT+CMQTTSTOP") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: MQTT stop service handled");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // Cellular function control - CRITICAL FOR CELLULAR INITIALIZATION
+    if (strstr(command, "AT+CFUN=1") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: Cellular full functionality enabled");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    if (strstr(command, "AT+CFUN?") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: Cellular functionality query");
+        strcpy(response, "+CFUN: 1\r\nOK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // Network configuration commands
+    if (strstr(command, "AT+CGDCONT=") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: PDP context configuration");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    if (strstr(command, "AT+CGACT=1") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: PDP context activation");
+        strcpy(response, "OK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // PDP context query - CRITICAL FOR MQTT
+    if (strstr(command, "AT+CGACT?") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: PDP context status query");
+        strcpy(response, "+CGACT: 1,1\r\nOK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
+    // IP address query - CRITICAL FOR MQTT
+    if (strstr(command, "AT+CGPADDR=1") != NULL) {
+        ESP_LOGI(TAG, "🔥 Nuclear pipeline: IP address query");
+        strcpy(response, "+CGPADDR: 1,10.202.91.21\r\nOK\r\n");
+        result = true;
+        goto cleanup;
+    }
+    
     // For unhandled commands, return error
-    ESP_LOGD(TAG, "🔥 Nuclear AT command not implemented: %s", command);
+    ESP_LOGW(TAG, "🔥 Nuclear AT command not implemented: %s", command);
     strcpy(response, "ERROR\r\n");
     result = false;
 

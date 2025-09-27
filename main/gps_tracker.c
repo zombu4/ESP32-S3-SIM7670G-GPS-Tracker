@@ -23,6 +23,8 @@
 #include "modules/battery/battery_module.h"
 #include "modules/modem_init/modem_init.h"
 #include "modules/parallel/nuclear_startup.h"
+#include "modules/parallel/nuclear_acceleration.h"
+#include "nuclear_performance_tracker.h"
 #include "baud_rate_tester.h"
 
 // External function declarations for MQTT JSON payload creation
@@ -193,6 +195,39 @@ void app_main(void)
  ESP_LOGI(TAG, "🚀 Running ESP32-S3 Performance Demonstration");
  performance_demo_simple();
  ESP_LOGI(TAG, "✅ Performance demonstration completed");
+ 
+ // ========= 💀🔥 ESP32-S3 NUCLEAR ACCELERATION ENGINE 🔥💀 =========
+ ESP_LOGI(TAG, "💀🔥 INITIALIZING NUCLEAR ACCELERATION ENGINE - BEAST MODE! 🔥💀");
+ const nuclear_acceleration_interface_t* nuke_if = nuclear_acceleration_get_interface();
+ if (nuke_if && nuke_if->initialize) {
+     nuclear_acceleration_config_t nuke_config = nuclear_acceleration_get_beast_config();
+     if (nuke_if->initialize(&nuke_config)) {
+         ESP_LOGI(TAG, "💀🔥 NUCLEAR ACCELERATION ONLINE - ALL SYSTEMS ACCELERATED! 🔥💀");
+         
+         // Acquire performance locks for critical startup operations
+         if (nuke_if->acquire_performance_locks && nuke_if->acquire_performance_locks()) {
+             ESP_LOGI(TAG, "🔥 NUCLEAR PERFORMANCE LOCKS ACQUIRED - 240MHz SUSTAINED!");
+         }
+         
+         // Display performance metrics
+         char metrics[512];
+         if (nuke_if->get_performance_metrics) {
+             nuke_if->get_performance_metrics(metrics, sizeof(metrics));
+             ESP_LOGI(TAG, "📊 %s", metrics);
+         }
+         
+         // Start nuclear performance tracking
+         ESP_LOGI(TAG, "🚀 Starting Nuclear Performance Tracker...");
+         if (nuclear_start_performance_tracking() == ESP_OK) {
+             ESP_LOGI(TAG, "✅ Nuclear Performance Tracker online");
+         } else {
+             ESP_LOGW(TAG, "⚠️ Failed to start nuclear performance tracker");
+         }
+         
+     } else {
+         ESP_LOGE(TAG, "❌ Nuclear acceleration initialization failed - continuing with standard performance");
+     }
+ }
  
  // ========= ESP32-S3 REVOLUTIONARY ETM+GDMA TEST =========
  ESP_LOGI(TAG, "🚀 Running ESP32-S3 Revolutionary ETM+GDMA Test");

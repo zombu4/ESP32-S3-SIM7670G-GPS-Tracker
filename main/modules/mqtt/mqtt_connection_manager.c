@@ -12,7 +12,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
-#include "mqtt_client.h" 
+#include "mqtt_client.h"
+#include <inttypes.h> 
 #include <string.h>
 
 static const char *TAG = "MQTT_CONN_MGR";
@@ -245,7 +246,7 @@ static void mqtt_get_debug_info_impl(char* debug_str, size_t max_len)
     };
     
     snprintf(debug_str, max_len,
-        "MQTT: status=%s, attempts=%u, success=%u, failures=%u, uptime=%us, msgs=%u",
+        "MQTT: status=%s, attempts=%" PRIu32 ", success=%" PRIu32 ", failures=%" PRIu32 ", uptime=%" PRIu32 "s, msgs=%" PRIu32,
         status_str[g_stats.status],
         g_stats.connection_attempts,
         g_stats.successful_connections, 

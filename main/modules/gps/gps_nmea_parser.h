@@ -9,12 +9,16 @@
 #define GPS_NMEA_PARSER_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 typedef struct {
     // Fix status
     bool has_valid_fix;
-    uint8_t satellites_used;
+    bool gps_is_working;        // GPS receiving satellites but no precise fix yet
+    uint8_t satellites_used;    // Satellites used in fix (from GGA)
+    uint8_t satellites_visible; // Total satellites visible (from GSV)  
+    uint8_t satellites_with_signal; // Satellites with SNR > 0 (from GSV)
     uint8_t fix_quality;
     
     // Location data

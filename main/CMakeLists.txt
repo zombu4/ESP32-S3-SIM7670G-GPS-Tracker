@@ -17,8 +17,14 @@ idf_component_register(SRCS "gps_tracker.c" "config.c" "version.c" "baud_rate_te
                            "modules/parallel/esp32s3_hardcore_optimization.c"
                            "modules/parallel/esp32s3_hardcore_demo.c"
                            "modules/parallel/uart_pipeline_nuclear_private.c"
+                           "modules/parallel/uart_pipeline_nuclear.c"
                            "modules/parallel/nuclear_integration.c"
                            "modules/parallel/nuclear_startup.c"
+                           "modules/parallel/nuclear_acceleration.c"
+                           "modules/gps/gps_nmea_parser.c"
+                           "modules/mqtt/mqtt_connection_manager.c"
+                           "modules/mqtt/mqtt_message_builder.c"
+                           "nuclear_performance_tracker.c"
                            "modules/cellular_debug_ultra.c"
                            "performance_demo_simple.c"
                            "modules/lte/lte_module.c"
@@ -32,4 +38,4 @@ idf_component_register(SRCS "gps_tracker.c" "config.c" "version.c" "baud_rate_te
                            "modules/connection/connection_manager.c"
                            "modules/cellular_native_stack.c"
                     INCLUDE_DIRS "." "modules" "tasks" "modules/lte" "modules/mqtt" "modules/gps" "modules/cellular" "modules/parallel"
-                    REQUIRES driver esp_timer nvs_flash json esp_psram esp_netif lwip mqtt esp_mm esp_driver_gpio esp_hw_support)
+                    REQUIRES driver esp_timer nvs_flash json esp_psram esp_netif lwip mqtt esp_mm esp_driver_gpio esp_hw_support esp_driver_gptimer esp_driver_mcpwm esp_driver_rmt)

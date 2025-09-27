@@ -36,6 +36,10 @@ nuclear_uart_pipeline_t *g_nuclear_pipeline = NULL;
 static esp_pm_lock_handle_t s_cpu_freq_lock = NULL;
 static esp_pm_lock_handle_t s_no_light_sleep_lock = NULL;
 
+// 💀🔥 FORWARD DECLARATIONS 🔥💀
+static nuclear_stream_type_t nuclear_detect_stream_type(const uint8_t *data, size_t len);
+static void nuclear_stream_demultiplexer_task(void *parameters);
+
 // 💀🔥 ESP32-S3 PERFORMANCE LOCKS 🔥💀
 
 static esp_err_t nuclear_setup_performance_locks(void)
